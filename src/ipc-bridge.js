@@ -58,3 +58,54 @@ export async function ptyReplay(id) {
 export function onPtyExit(id, callback) {
   return listen(`pty:exit:${id}`, (event) => callback(event.payload));
 }
+
+// ── P1：会话持久化 ──────────────────────────────────────────────────
+
+/** 以 Rust 侧 slot 为事实源快照并落库（无需前端回传配置）。返回持久化条数。 */
+export async function sessionPersist() {
+  return invoke('session_persist');
+}
+
+/** 启动恢复：返回上次保存的终端配置列表。 */
+export async function sessionRestore() {
+  return invoke('session_restore');
+}
+
+/** 显式保存（前端构造的配置，兜底用）。 */
+export async function sessionSave(slots) {
+  return invoke('session_save', { slots });
+}
+
+// ── P1：CC Status（skills/hooks/plugins/tasks/agents） ──────────────
+
+/** 读取 CC Status。project_dir 为当前活跃终端 cwd（读 {cwd}/.claude）。 */
+export async function ccStatus(projectDir) {
+  return invoke('cc_status', { projectDir });
+}
+
+export async function ccStatusInvalidate() {
+  return invoke('cc_status_invalidate');
+}
+
+// ── P1：健康检测 ────────────────────────────────────────────────────
+
+export async function healthCheck() {
+  return invoke('health_check');
+}
+
+/** 后台健康告警（Rust 每 5s emit，仅有告警项时推送）。 */
+export function onHealthReport(callback) {
+  return listen('health:report', (event) => callback(event.payload));
+}
+
+// ── 托盘 / 应用生命周期事件 ─────────────────────────────────────────
+
+/** 托盘「新建终端」点击。 */
+export function onTrayNewTerminal(callback) {
+  return listen('tray:new-terminal', () => callback());
+}
+
+/** 应用即将退出（托盘「退出」触发）——前端在此做最终会话保存。 */
+export function onAppBeforeQuit(callback) {
+  return listen('app:before-quit', () => callback());
+}

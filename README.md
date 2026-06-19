@@ -25,7 +25,11 @@ OneCode Desktop 是 [OneCode](https://github.com/yiyan-yixing/onecode) 的桌面
 │     MultiPtyManager (RwLock<HashMap<Uuid, TerminalSlot>>) │
 │       ├─ PTY 读取线程 ──► mpsc ──► 16ms 批量合并任务      │
 │       └─ RingBuffer (10MB/slot) ──► Tab 切换 replay       │
-│     SessionStore (rusqlite) · TrayManager                │
+│     SessionStore (rusqlite) · TrayIcon · 健康检测循环     │
+│     CcStatusCache ──► 读 ~/.claude 的 skills/agents/…    │
+│                                                          │
+│   Frontend (WebView)                                     │
+│     CcStatusView (徽章) · MentionController (@弹窗)      │
 └──────────────────────────────────────────────────────────┘
 ```
 
@@ -51,17 +55,22 @@ onecode-desktop/
 │   ├── tauri.conf.json   窗口 1200×800、打包配置
 │   ├── capabilities/     IPC 权限白名单
 │   └── src/
-│       ├── lib.rs        入口：Builder.setup + invoke_handler
+│       ├── lib.rs        入口：Builder.setup + invoke_handler + 启动恢复
 │       ├── pty/          🔴 PTY 核心：MultiPtyManager / TerminalSlot / RingBuffer
-│       ├── commands.rs   invoke 命令（Channel<Vec<u8>> 版）
-│       ├── session/      SQLite 会话持久化（P1 骨架）
-│       ├── tray.rs       系统托盘（P1 骨架）
+│       │   ├── mod.rs       RwLock 管理 + snapshot + kill_all_blocking
+│       │   ├── slot.rs      TerminalSlot + RingBuffer + SlotStatus
+│       │   └── health.rs    僵尸/RSS 健康检测（每 5s 轮询）
+│       ├── commands.rs   invoke 命令（Channel<Vec<u8>> + cc_status + health）
+│       ├── cc_status.rs  CC Status：读 ~/.claude 的 skills/hooks/agents…
+│       ├── session/      SQLite 会话持久化（自动保存 + 启动恢复）
+│       ├── tray.rs       系统托盘常驻（新建/显示/退出 + 关窗隐藏）
 │       └── config.rs     应用配置
 ├── src/                  前端 WebView
-│   ├── index.html        极简骨架
+│   ├── index.html        骨架（标题栏 + Tab 栏 + 终端 + 状态栏徽章）
 │   ├── styles.css        Cowork 暖色主题
 │   ├── ipc-bridge.js     🔴 Tauri invoke + Channel 封装
-│   └── terminal/         🔴 TabManager / xterm / 滚动条 / IME
+│   ├── cc-status.js      状态栏徽章 + agent 数据源
+│   └── terminal/         🔴 TabManager / xterm / @mention / 滚动条 / IME
 ├── static/               运行时同步的 xterm/marked/hljs（.gitignore，生成物）
 ├── scripts/copy-static.sh  从 node_modules 同步静态资源
 └── .github/workflows/    CI（cargo check）+ 发布（dmg/AppImage）
@@ -105,16 +114,35 @@ make build            # 产出 .dmg (macOS) / .AppImage (Linux)
 | `Cmd/Ctrl + W` | 关闭当前终端 |
 | `Cmd/Ctrl + 1~9` | 切换到第 N 个终端 |
 | `Cmd/Ctrl + Shift + [ / ]` | 上 / 下一个终端 |
+| 输入 `@` | 触发 Agent @mention 弹窗（↑↓ 选择、Enter 确认、Esc 取消） |
 
-## 里程碑范围（当前：M1）
+## 功能矩阵（对照 PRD v0.1）
+
+| 需求 | 状态 | 说明 |
+|---|---|---|
+| P0-1~6 多终端核心 | ✅ | 创建 / 切换 / 关闭 / 重启 / 自动重启 / Claude Code 集成 |
+| P1-1 系统托盘 | ✅ | 关窗隐藏到托盘；菜单：新建/显示/退出；退出时 kill 全部 PTY |
+| P1-2 会话持久化 | ✅ | create/close/rename 去抖自动落库；启动按配置恢复终端 |
+| P1-3 状态指示 | ✅ | Tab 圆点：运行(绿)/退出(灰)/崩溃(红) |
+| P1-4 终端重命名 | ✅ | 双击 Tab 标签重命名 |
+| P1-5 快捷键 | ✅ | 见上表 |
+| P1-6 Agent @mention | ✅ | 弹窗列出来自 `~/.claude/agents` 的 agent，选中插入 `@id` |
+| P1-7 CC Status 徽章 | ✅ | 状态栏显示 skills/hooks/plugins/tasks 计数 |
+| 健康检测 | ✅ | 每 5s 轮询 pid RSS/僵尸，状态栏告警 |
+| P2 远程/分屏/搜索/分组 | ❌ | 不在 v0.1 范围 |
+
+## 里程碑范围（当前：M1 + P1 全量）
 
 | 里程碑 | 状态 | 范围 |
 |---|---|---|
-| **M1** | ✅ 本仓库 | 单终端链路验证 + **多终端 Tab 管理（P0 核心）** + Cowork 暖色主题 |
-| **M2** | ⏳ | 健康监控全量 + 资源告警 + 拖拽排序 |
-| **M3** | ⏳ | 系统托盘常驻 + 会话持久化恢复 + 远程终端 + 双平台分发 |
+| **M1** | ✅ | 单终端链路 + 多终端 Tab 管理（P0 核心）+ Cowork 暖色主题 |
+| **P1 全量** | ✅ 本仓库 | 托盘常驻 + 会话持久化 + 健康检测 + CC Status + @mention |
+| **M2** | ⏳ | 拖拽排序 + detach 非活跃终端优化 + 资源告警面板 |
+| **M3** | ⏳ | 远程终端（WebSocket）+ 双平台正式分发 |
 
-P1 模块（`session/`、`tray.rs`、`health.rs` 完整逻辑）当前为**可编译骨架**，含签名与 `TODO(P1)` 标注，待 M2/M3 填充。
+> ⚠️ **编译验证**：本环境无 cargo/rustc，Rust 代码未经 `cargo check`。便携性风险点：
+> `portable-pty 0.8`（spawn/process_id/wait/ExitStatus）与 `Tauri v2 tray/menu` API 的精确签名。
+> 首次 `cargo check` 可能需在 `create_pty` / `tray.rs` 微调。前端 8 个 JS 文件已通过 `node --check`。
 
 ## 设计文档（来源）
 

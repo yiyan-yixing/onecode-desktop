@@ -1,14 +1,22 @@
-// 多终端 Tab 管理（P0 核心）。
+// 多终端 Tab 管理（P0 核心 + P1 接线）。
 //
 // 设计：每个 Tab 对应一个 xterm 实例 + 一个 Rust slot。M1 策略——
 // xterm 实例始终 attached（display:none 隐藏非活跃），Channel.onmessage 持续
 // 把 PTY 输出 write 到对应 term，故 Tab 切换无需显式 replay（内容已在 buffer）。
-// pty_replay 命令保留，供 M2 「detach 非活跃终端」优化使用。
+// pty_replay 命令保留，供 M2「detach 非活跃终端」优化使用。
+//
+// P1 接线：
+// - @mention：每个终端挂一个 MentionController，共享 .mention-pop 弹窗。
+// - 会话持久化：create/close/rename 后去抖 sessionPersist；app:before-quit 时立即落库。
+// - CC Status：暴露 getActiveCwd() 供徽章读取 {cwd}/.claude。
 
 import { createTerminal } from './terminal.js';
 import { ScrollThumb } from './scroll-thumb.js';
 import { initImeFix } from './ime-fix.js';
+import { MentionController } from './mention.js';
 import * as ipc from '../ipc-bridge.js';
+
+const AUTOSAVE_DEBOUNCE_MS = 350;
 
 export class TabManager {
   constructor() {
@@ -17,14 +25,34 @@ export class TabManager {
     this.activeId = null;
     this.tabBar = null;
     this.termContainer = null;
+    this.mentionPop = null; // 共享 @mention 弹窗
+    this.agentProvider = null; // () => AgentInfo[]
     this.onChange = null; // 外部钩子（更新状态栏）
+    this._saveTimer = null;
   }
 
   init() {
     this.tabBar = document.getElementById('tabBar');
     this.termContainer = document.getElementById('termContainer');
+    this.mentionPop = document.getElementById('mentionPop');
     document.getElementById('tabNew').addEventListener('click', () => this.createTab());
-    this.createTab({ label: 'main' });
+  }
+
+  /** 启动恢复：按上次保存的配置重建终端；无记录则建默认 main。 */
+  async restoreOrInit(slots) {
+    if (slots && slots.length) {
+      for (const s of slots) {
+        await this.createTab({
+          label: s.label,
+          cmd: s.cmd,
+          args: s.args,
+          cwd: s.cwd,
+          env: s.env,
+        });
+      }
+    } else {
+      await this.createTab({ label: 'main' });
+    }
   }
 
   async createTab(opts = {}) {
@@ -57,13 +85,27 @@ export class TabManager {
     term.onData((data) => ipc.ptyWrite(id, data));
     term.onResize(({ cols, rows }) => ipc.ptyResize(id, cols, rows));
 
+    // @mention 控制器
+    const mention = new MentionController({
+      term,
+      termEl,
+      popEl: this.mentionPop,
+      sendInput: (s) => ipc.ptyWrite(id, s),
+      getAgents: () => (this.agentProvider ? this.agentProvider() : []),
+    });
+
     const state = {
       id,
       label,
+      cmd: opts.cmd,
+      args: opts.args,
+      cwd: opts.cwd,
+      env: opts.env,
       term,
       fitAddon,
       scrollThumb,
       termEl,
+      mention,
       unlistenExit,
       status: 'running',
     };
@@ -72,6 +114,7 @@ export class TabManager {
 
     this.addTabDom(id, label, 'running');
     this.switchTo(id);
+    this._scheduleSave();
     this._notifyChange();
     return id;
   }
@@ -79,6 +122,8 @@ export class TabManager {
   switchTo(id) {
     for (const [tid, st] of this.tabs) {
       st.termEl.style.display = tid === id ? 'block' : 'none';
+      // 切走时隐藏残留的 mention 弹窗
+      if (tid !== id && st.mention) st.mention.hide();
     }
     this.tabBar.querySelectorAll('.tab-item').forEach((el) => {
       el.classList.toggle('active', el.dataset.id === id);
@@ -117,6 +162,7 @@ export class TabManager {
         this.createTab(); // 至少保留一个
       }
     }
+    this._scheduleSave();
     this._notifyChange();
   }
 
@@ -137,6 +183,33 @@ export class TabManager {
 
   switchByIndex(i) {
     if (i >= 0 && i < this.order.length) this.switchTo(this.order[i]);
+  }
+
+  /** 活跃终端的 cwd（CC Status 项目目录用）。 */
+  getActiveCwd() {
+    if (!this.activeId) return null;
+    const st = this.tabs.get(this.activeId);
+    return st ? st.cwd || null : null;
+  }
+
+  /** 立即落库（app:before-quit / 托盘退出用）。 */
+  async persistNow() {
+    if (this._saveTimer) {
+      clearTimeout(this._saveTimer);
+      this._saveTimer = null;
+    }
+    try {
+      await ipc.sessionPersist();
+    } catch (_) {}
+  }
+
+  /** 去抖保存：create/close/rename 后 350ms 合并落库。 */
+  _scheduleSave() {
+    if (this._saveTimer) clearTimeout(this._saveTimer);
+    this._saveTimer = setTimeout(() => {
+      this._saveTimer = null;
+      ipc.sessionPersist().catch(() => {});
+    }, AUTOSAVE_DEBOUNCE_MS);
   }
 
   // ── DOM 操作 ──────────────────────────────────────────────────
@@ -212,6 +285,7 @@ export class TabManager {
         e.stopPropagation();
         this.startRename(id, span);
       });
+      this._scheduleSave();
       this._notifyChange();
     };
     input.addEventListener('blur', commit);

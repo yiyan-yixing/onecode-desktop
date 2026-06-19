@@ -9,7 +9,7 @@
 //!   稳定运行 5s 重置）。
 
 mod slot;
-mod health;
+pub mod health;
 
 pub use slot::{TerminalSlot, RingBuffer, SlotStatus, RING_BUFFER_MAX_BYTES};
 
@@ -55,6 +55,19 @@ pub struct SlotSummary {
     pub exit_code: Option<i32>,
     pub cmd: String,
     pub cwd: String,
+}
+
+/// 终端配置快照（会话持久化用）。不含运行时状态（pid/status/ring buffer），
+/// 仅保留重 spawn 所需的 {id,label,cmd,args,cwd,env,created_at}。
+#[derive(serde::Serialize, Clone)]
+pub struct SlotConfig {
+    pub id: String,
+    pub label: String,
+    pub cmd: String,
+    pub args: Vec<String>,
+    pub cwd: String,
+    pub env: HashMap<String, String>,
+    pub created_at: String,
 }
 
 struct ManagerInner {
@@ -224,6 +237,47 @@ impl MultiPtyManager {
     pub async fn list(&self) -> Vec<SlotSummary> {
         let inner = self.inner.read().await;
         inner.slots.values().map(summary_of).collect()
+    }
+
+    /// 当前所有终端的配置快照（会话持久化用，不含运行时状态）。
+    pub async fn snapshot(&self) -> Vec<SlotConfig> {
+        let inner = self.inner.read().await;
+        inner
+            .slots
+            .values()
+            .map(|s| SlotConfig {
+                id: s.id.to_string(),
+                label: s.label(),
+                cmd: s.cmd.clone(),
+                args: s.args.clone(),
+                cwd: s.cwd.clone(),
+                env: s.env.clone(),
+                created_at: s.created_at.to_rfc3339(),
+            })
+            .collect()
+    }
+
+    /// 同步终止所有终端（托盘「退出」用，避免异步 + State 借用生命周期问题）。
+    /// 对 tokio RwLock 用 try_write；若拿不到锁（罕见，spawn/restart 进行中）则
+    /// 退化为 try_read 逐个 kill（slot.kill 是同步的，无需改结构）。
+    pub fn kill_all_blocking(&self) {
+        let slots: Vec<Arc<TerminalSlot>> = match self.inner.try_write() {
+            Ok(mut inner) => {
+                inner.channels.clear();
+                inner.slots.drain().map(|(_, v)| v).collect()
+            }
+            Err(_) => match self.inner.try_read() {
+                Ok(inner) => inner.slots.values().cloned().collect(),
+                Err(_) => {
+                    log::warn!("[pty] kill_all: lock busy, skip");
+                    return;
+                }
+            },
+        };
+        for s in slots {
+            s.mark_closed(); // 让 wait 线程不自动重启
+            let _ = s.kill();
+        }
     }
 }
 

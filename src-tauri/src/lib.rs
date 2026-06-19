@@ -1,5 +1,6 @@
 //! OneCode Desktop 应用入口：模块声明 + Tauri Builder。
 
+mod cc_status;
 mod commands;
 mod config;
 mod events;
@@ -7,11 +8,13 @@ mod pty;
 mod session;
 mod tray;
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use tauri::Manager;
 
 use config::AppConfig;
+use cc_status::CcStatusCache;
 use pty::MultiPtyManager;
 use session::SessionStore;
 
@@ -32,7 +35,13 @@ pub fn run() {
             let pty_mgr = MultiPtyManager::new(app.handle().clone(), config, runtime);
             app.manage(pty_mgr);
 
-            // 会话存储（P1 骨架，初始化失败不阻塞启动）
+            // CC Status 缓存（skills/hooks/plugins/tasks/agents，读 ~/.claude）
+            let global_dir = std::env::var("HOME")
+                .map(|h| PathBuf::from(h).join(".claude"))
+                .unwrap_or_else(|_| PathBuf::from(".claude"));
+            app.manage(CcStatusCache::new(global_dir));
+
+            // 会话存储（P1，初始化失败不阻塞启动——前端启动恢复会捕获缺失并建默认终端）
             match app.path().app_data_dir() {
                 Ok(dir) => match SessionStore::new(dir) {
                     Ok(store) => {
@@ -47,10 +56,13 @@ pub fn run() {
                 }
             }
 
-            // 系统托盘（P1 骨架）
+            // 系统托盘（P1）
             if let Err(e) = tray::setup(app) {
                 log::warn!("[tray] setup failed (P1, non-fatal): {e}");
             }
+
+            // 健康检测后台循环（每 5s 轮询 pid RSS/僵尸）
+            pty::health::start_loop(app.handle().clone());
 
             Ok(())
         })
@@ -65,6 +77,10 @@ pub fn run() {
             commands::pty_replay,
             commands::session_save,
             commands::session_restore,
+            commands::session_persist,
+            commands::cc_status,
+            commands::cc_status_invalidate,
+            commands::health_check,
         ])
         .run(tauri::generate_context!())
         .expect("failed to run OneCode Desktop");

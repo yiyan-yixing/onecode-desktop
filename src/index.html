@@ -27,6 +27,8 @@
     <!-- Terminal panel -->
     <main class="term-panel">
       <div class="term-container" id="termContainer"></div>
+      <!-- @mention 弹窗（共享，活跃终端可见时显示） -->
+      <div class="mention-pop" id="mentionPop"></div>
       <div class="term-empty" id="termEmpty" style="display:none">
         <div class="empty-icon">⌘</div>
         <div class="empty-text">按 <kbd>Ctrl/Cmd</kbd> + <kbd>T</kbd> 新建终端</div>
@@ -39,7 +41,10 @@
         <span class="statusbar-dot" id="statusDot"></span>
         <span id="statusText">就绪</span>
       </div>
+      <span class="statusbar-warn" id="healthWarn"></span>
       <div class="statusbar-spacer"></div>
+      <!-- CC Status 徽章（skills/hooks/plugins/tasks） -->
+      <div class="statusbar-item cc-badges" id="ccBadges"></div>
       <div class="statusbar-item" id="statusCount">0 终端</div>
       <div class="statusbar-item">Claude Code 内核</div>
     </footer>

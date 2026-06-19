@@ -1,8 +1,11 @@
-//! SessionStore — SQLite 会话持久化（P1 骨架，可编译可运行）。
+//! SessionStore — SQLite 会话持久化（P1 完整实现）。
 //!
 //! 设计（见 desktop-prd.md §5.6 / desktop-code-structure.md）：
 //! 保存终端**配置**（{id,label,cmd,args,cwd,env}），应用重启后按配置重新 spawn。
 //! 与 tmux 不同，**不保存终端输出内容**——PTY 无法真正恢复终端状态。
+//!
+//! 调用方：`session_persist` 命令（前端 create/close/rename 去抖触发） +
+//! `session_restore` 命令（前端启动时读取并重建终端）。
 
 mod schema;
 

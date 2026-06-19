@@ -6,13 +6,16 @@
 //! - pty_replay 返回 `Vec<u8>`（Tab 切换回放）。
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use tauri::ipc::Channel;
 use tauri::State;
 
+use crate::cc_status::CcStatusCache;
 use crate::config::AppConfig;
-use crate::pty::{MultiPtyManager, SlotSummary};
+use crate::pty::health::{check_health, HealthReport};
+use crate::pty::{MultiPtyManager, SlotConfig, SlotSummary};
 use crate::session::{PersistentSlot, SessionStore};
 
 #[derive(serde::Serialize)]
@@ -140,4 +143,57 @@ pub async fn session_restore(
     state: State<'_, SessionStore>,
 ) -> Result<Vec<PersistentSlot>, String> {
     state.load_all().await.map_err(|e| e.to_string())
+}
+
+/// 快照当前所有终端配置并写入 SQLite（前端 create/close/rename 时去抖调用）。
+/// 无需前端回传配置——以 Rust 侧 slot 为单一事实源。
+#[tauri::command]
+pub async fn session_persist(
+    pty: State<'_, MultiPtyManager>,
+    store: State<'_, SessionStore>,
+) -> Result<usize, String> {
+    let cfgs: Vec<SlotConfig> = pty.snapshot().await;
+    let slots: Vec<PersistentSlot> = cfgs
+        .into_iter()
+        .map(|c| PersistentSlot {
+            id: c.id,
+            label: c.label,
+            cmd: c.cmd,
+            args: c.args,
+            cwd: c.cwd,
+            env: c.env,
+            created_at: c.created_at,
+        })
+        .collect();
+    let n = slots.len();
+    store.save_all(&slots).await.map_err(|e| e.to_string())?;
+    Ok(n)
+}
+
+// ── P1：CC Status（skills/hooks/plugins/tasks/agents） ──────────────
+
+#[tauri::command]
+pub async fn cc_status(
+    project_dir: Option<String>,
+    state: State<'_, CcStatusCache>,
+) -> Result<crate::cc_status::CcStatus, String> {
+    let p = project_dir.map(PathBuf::from);
+    Ok(state.load(p.as_deref()))
+}
+
+/// 清空 CC Status 缓存（前端「刷新」用）。
+#[tauri::command]
+pub async fn cc_status_invalidate(state: State<'_, CcStatusCache>) -> Result<(), String> {
+    state.invalidate();
+    Ok(())
+}
+
+// ── P1：健康检测 ────────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn health_check(
+    state: State<'_, MultiPtyManager>,
+) -> Result<Vec<HealthReport>, String> {
+    let summaries = state.list().await;
+    Ok(check_health(&summaries))
 }
