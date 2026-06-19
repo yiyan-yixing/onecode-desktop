@@ -52,7 +52,8 @@ OneCode Desktop 是 [OneCode](https://github.com/yiyan-yixing/onecode) 的桌面
 onecode-desktop/
 ├── src-tauri/            Rust 后端
 │   ├── Cargo.toml        依赖：tauri2 / portable-pty / rusqlite / serde / tokio
-│   ├── tauri.conf.json   窗口 1200×800、打包配置
+│   ├── .cargo/config.toml  Cargo target-dir → ../target（产物统一到项目根目录）
+│   ├── tauri.conf.json   窗口 1200×800、打包配置（dmg/appimage/deb/msi/nsis）
 │   ├── capabilities/     IPC 权限白名单
 │   └── src/
 │       ├── lib.rs        入口：Builder.setup + invoke_handler + 启动恢复
@@ -101,10 +102,19 @@ make dev              # cargo tauri dev，热重载
 ### 构建
 
 ```bash
-make build            # 产出 .dmg (macOS) / .AppImage (Linux)
+make build            # 产出 .dmg (macOS) / .AppImage+.deb (Linux) / .msi+.exe (Windows)
 ```
 
-产物位于 `src-tauri/target/release/bundle/`。
+产物位于 `target/release/bundle/`。
+
+| 平台 | 安装包格式 | 路径 |
+|---|---|---|
+| macOS | `.dmg` | `target/release/bundle/dmg/` |
+| macOS | `.app` | `target/release/bundle/macos/` |
+| Linux | `.AppImage` | `target/release/bundle/appimage/` |
+| Linux | `.deb` | `target/release/bundle/deb/` |
+| Windows | `.msi` | `target/release/bundle/msi/` |
+| Windows | `.exe` (NSIS) | `target/release/bundle/nsis/` |
 
 ## 快捷键
 
@@ -140,9 +150,21 @@ make build            # 产出 .dmg (macOS) / .AppImage (Linux)
 | **M2** | ⏳ | 拖拽排序 + detach 非活跃终端优化 + 资源告警面板 |
 | **M3** | ⏳ | 远程终端（WebSocket）+ 双平台正式分发 |
 
-> ⚠️ **编译验证**：本环境无 cargo/rustc，Rust 代码未经 `cargo check`。便携性风险点：
-> `portable-pty 0.8`（spawn/process_id/wait/ExitStatus）与 `Tauri v2 tray/menu` API 的精确签名。
-> 首次 `cargo check` 可能需在 `create_pty` / `tray.rs` 微调。前端 8 个 JS 文件已通过 `node --check`。
+> **编译验证**：已装 Rust 工具链，用 `verify-rust/` 子 crate（`cargo test`，27 通过）通过 `#[path]`
+> 纳入**真实生产源码** `cc_status.rs` / `pty/slot.rs` 编译，并复制 `create_pty` 真 spawn 子进程验证
+> `portable-pty 0.8.1` 全链路 API。由此发现并修复 4 处 Rust 编译阻塞 bug（见下）+ 1 处 JS bug。
+> 仍未覆盖：`tauri`/`tray`/`rusqlite`/`tokio` 相关代码（需系统 GUI 库，本环境无 root 无法 `cargo tauri build`）。
+> 前端 8 个 JS 文件 `node --check` 通过，`tests/` 下 153 个纯逻辑/真实模块用例通过（`npm test`）。
+
+### 本轮验证发现并已修复的 Bug
+
+| # | 文件:行 | 问题 | 修复 |
+|---|---|---|---|
+| 1 | `terminal/mention.js:128` | `_select` 先 `hide()` 清空 prefix 再算 `n`，backspace 恒为 1 | 先捕获 `n` 再 hide |
+| 2 | `pty/slot.rs:184` | 对 `Box<dyn MasterPty>` 直接 `write_all`（trait 不 impl `Write`） | 改 `take_writer()` |
+| 3 | `pty/mod.rs:320` | `openpty(size, None)` 多传 `None`（0.8 单参） | 去掉 `None` |
+| 4 | `pty/mod.rs:347` | `master.spawn(slave, cb)`（0.8 是 `slave.spawn_command(cb)`） | 改 slave.spawn_command |
+| 5 | `cc_status.rs:192` | 对 `String` 调 `unwrap_or_else`（`fm_field` 返 `String` 非 `Option`） | 改 `is_empty` 判空 |
 
 ## 设计文档（来源）
 

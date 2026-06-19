@@ -3,11 +3,14 @@
   "version": "0.1.0",
   "description": "OneCode Desktop — 原生桌面客户端，一个窗口管理多个 AI 终端",
   "private": true,
+  "type": "module",
   "scripts": {
     "copy-static": "bash scripts/copy-static.sh",
     "tauri": "tauri",
     "dev": "tauri dev",
-    "build": "tauri build"
+    "build": "tauri build",
+    "test": "node --test \"tests/*.test.mjs\"",
+    "test:verbose": "node --test --test-reporter=spec \"tests/*.test.mjs\""
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.1.0",

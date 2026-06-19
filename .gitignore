@@ -2,8 +2,9 @@
 /node_modules/
 
 # Rust / Cargo
-/src-tauri/target/
+/target/
 **/*.rs.bk
+Cargo.lock
 
 # Tauri generated
 /src-tauri/gen/
@@ -36,3 +37,4 @@ npm-debug.log*
 
 # Local settings
 .claude/settings.local.json
+verify-rust/target/

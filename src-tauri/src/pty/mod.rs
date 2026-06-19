@@ -319,15 +319,12 @@ fn create_pty(
 ) -> Result<PtyHandles> {
     let pty_system = native_pty_system();
     let pair = pty_system
-        .openpty(
-            PtySize {
-                rows: DEFAULT_ROWS,
-                cols: DEFAULT_COLS,
-                pixel_width: 0,
-                pixel_height: 0,
-            },
-            None,
-        )
+        .openpty(PtySize {
+            rows: DEFAULT_ROWS,
+            cols: DEFAULT_COLS,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
         .map_err(|e| anyhow!("openpty failed: {e}"))?;
 
     let mut cb = CommandBuilder::new(cmd);
@@ -342,11 +339,15 @@ fn create_pty(
         cb.env(k, v);
     }
 
-    let mut master = pair.master;
-    // spawn 消费 slave（关闭 slave 端，PTY 才能正确发送 EOF）。
-    let child = master.spawn(pair.slave, cb).map_err(|e| anyhow!("spawn failed: {e}"))?;
+    // portable-pty 0.8：spawn_command 在 **slave** 上（不是 master.spawn(slave, cb)）。
+    // spawn 后 slave 随 pair 释放关闭，master reader 才能在子进程退出时收到 EOF。
+    let child = pair
+        .slave
+        .spawn_command(cb)
+        .map_err(|e| anyhow!("spawn failed: {e}"))?;
+    let master = pair.master;
     let killer = child.clone_killer();
-    // portable-pty 0.8: process_id() -> Option<u32>
+    // portable-pty 0.8: Child::process_id() -> Option<u32>
     let pid = child.process_id();
     let reader = master
         .try_clone_reader()

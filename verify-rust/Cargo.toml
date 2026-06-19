@@ -1,0 +1,15 @@
+[package]
+name = "onecode-desktop-verify"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# 刻意只引「不依赖 Tauri/GTK」的纯逻辑依赖，使本 crate 可在无系统 GUI 库时编译。
+# 关键：portable-pty 0.8 / uuid 1 / chrono 0.4 版本与 src-tauri/Cargo.toml 完全一致。
+[dependencies]
+chrono = { version = "0.4", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+portable-pty = "0.8"
+uuid = { version = "1", features = ["v4"] }
+anyhow = "1"

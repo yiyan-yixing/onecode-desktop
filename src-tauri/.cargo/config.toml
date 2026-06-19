@@ -1,0 +1,6 @@
+[build]
+# 将 Cargo 编译产物输出到项目根目录 target/，
+# 而非默认的 src-tauri/target/。
+# 这样 tauri build 生成的安装包位于：
+#   <project-root>/target/release/bundle/
+target-dir = "../target"

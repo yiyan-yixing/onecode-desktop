@@ -14,34 +14,37 @@ DST="$ROOT/src/static"
 
 mkdir -p "$DST"
 
-require() {
-    if [ ! -e "$1" ]; then
+# 优先拷贝 .min.js，不存在则回退到 .js（xterm v5+ 不再提供预编译 min 版本）
+cp_if() {
+    if [ -e "${1%.js}.min.js" ]; then
+        cp "${1%.js}.min.js" "$2"
+    elif [ -e "$1" ]; then
+        cp "$1" "$2"
+    else
         echo "✗ 缺失依赖文件：$1" >&2
         echo "  请先在仓库根目录执行：npm install" >&2
         exit 1
     fi
-}
-
-cp_if() {
-    require "$1"
-    cp "$1" "$2"
     echo "✓ $(basename "$2")"
 }
 
 echo "→ 同步静态资源到 src/static/ ..."
 
 # ── xterm 核心（终端渲染） ──
-cp_if "$SRC/@xterm/xterm/css/xterm.css" "$DST/xterm.css"
-cp_if "$SRC/@xterm/xterm/lib/xterm.min.js" "$DST/xterm.min.js"
+cp_if "$SRC/@xterm/xterm/lib/xterm.js" "$DST/xterm.min.js"
+cp "$SRC/@xterm/xterm/css/xterm.css" "$DST/xterm.css"
+echo "✓ xterm.css"
 
 # ── addons ──
-cp_if "$SRC/@xterm/addon-fit/lib/addon-fit.min.js" "$DST/addon-fit.min.js"
-cp_if "$SRC/@xterm/addon-web-links/lib/addon-web-links.min.js" "$DST/addon-web-links.min.js"
-cp_if "$SRC/@xterm/addon-webgl/lib/addon-webgl.min.js" "$DST/addon-webgl.min.js"
+cp_if "$SRC/@xterm/addon-fit/lib/addon-fit.js" "$DST/addon-fit.min.js"
+cp_if "$SRC/@xterm/addon-web-links/lib/addon-web-links.js" "$DST/addon-web-links.min.js"
+cp_if "$SRC/@xterm/addon-webgl/lib/addon-webgl.js" "$DST/addon-webgl.min.js"
 
 # ── markdown / 代码高亮（Preview 模块用，M2+） ──
-cp_if "$SRC/marked/marked.min.js" "$DST/marked.min.js"
-cp_if "$SRC/highlight.js/highlight.min.js" "$DST/highlight.min.js"
+cp "$SRC/marked/marked.min.js" "$DST/marked.min.js"
+echo "✓ marked.min.js"
+cp "$SRC/highlight.js/lib/core.js" "$DST/highlight.min.js"
+echo "✓ highlight.min.js (core.js)"
 
 # hljs 主题（兼容 .min.css / .css 两种发布）
 if [ -e "$SRC/highlight.js/styles/github-dark.min.css" ]; then

@@ -189,7 +189,11 @@ fn scan_skills(dir: &Path, scope: &str, out: &mut Vec<SkillInfo>) {
 
 fn skill_from_content(fallback_name: &str, content: &str, scope: &str) -> SkillInfo {
     if let Some(fm) = frontmatter_body(content) {
-        let name = fm_field(&fm, "name").unwrap_or_else(|| fallback_name.to_string());
+        // fm_field 返回 String（空串=未找到），非 Option：空则回退到 fallback_name。
+        let name = {
+            let n = fm_field(&fm, "name");
+            if n.is_empty() { fallback_name.to_string() } else { n }
+        };
         let description = fm_field(&fm, "description");
         SkillInfo { name, description, scope: scope.to_string() }
     } else {
@@ -494,4 +498,78 @@ fn expand(field: &str, lo: i32, hi: i32) -> Option<std::collections::BTreeSet<u3
         }
     }
     Some(set)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn eq_set(got: std::collections::BTreeSet<u32>, expected: &[u32]) {
+        let exp: std::collections::BTreeSet<u32> = expected.iter().copied().collect();
+        assert_eq!(got, exp);
+    }
+
+    #[test]
+    fn expand_star_full_range() {
+        let s = expand("*", 0, 59).expect("*");
+        assert_eq!(s.len(), 60);
+    }
+    #[test]
+    fn expand_single_range_comma_step() {
+        eq_set(expand("5", 0, 59).unwrap(), &[5]);
+        eq_set(expand("1-5", 0, 59).unwrap(), &[1, 2, 3, 4, 5]);
+        eq_set(expand("1,3,5", 0, 59).unwrap(), &[1, 3, 5]);
+        eq_set(expand("*/15", 0, 59).unwrap(), &[0, 15, 30, 45]);
+        eq_set(expand("10-30/5", 0, 59).unwrap(), &[10, 15, 20, 25, 30]);
+    }
+    #[test]
+    fn expand_out_of_range_or_invalid_is_none() {
+        assert!(expand("60", 0, 59).is_none()); // 单值越界
+        assert!(expand("5,99", 0, 59).is_none()); // 一项非法整体失败
+        assert!(expand("abc", 0, 59).is_none());
+        assert!(expand("*/0", 0, 59).is_none()); // step 0 拒绝（与 JS 原版不同）
+    }
+
+    #[test]
+    fn cron_next_field_count_and_invalid() {
+        assert_eq!(cron_next("* * *"), "");
+        assert_eq!(cron_next(""), "");
+        assert_eq!(cron_next("* * * * * *"), "");
+        assert_eq!(cron_next("60 0 * * *"), "");
+        assert_eq!(cron_next("0 24 * * *"), "");
+        assert_eq!(cron_next("* * * * 7"), "");
+    }
+    #[test]
+    fn cron_next_impossible_day_pruned() {
+        assert_eq!(cron_next("0 0 31 2 *"), "");
+        assert_eq!(cron_next("0 0 30 2 *"), "");
+        assert_eq!(cron_next("0 0 31 4 *"), "");
+    }
+    #[test]
+    fn cron_next_possible_day_nonempty() {
+        assert!(!cron_next("0 0 31 * *").is_empty());
+        assert!(!cron_next("0 0 30 * *").is_empty());
+    }
+    #[test]
+    fn cron_next_every_minute_under_1m() {
+        assert_eq!(cron_next("* * * * *"), "< 1m");
+    }
+
+    #[test]
+    fn frontmatter_body_basic() {
+        assert_eq!(
+            frontmatter_body("---\nname: foo\ndescription: bar\n---\n# body"),
+            Some("name: foo\ndescription: bar".to_string())
+        );
+        assert_eq!(frontmatter_body("# no fm"), None);
+        assert_eq!(frontmatter_body("---\nname: x"), None); // 无闭合
+    }
+    #[test]
+    fn fm_field_lookup() {
+        let fm = "name: Arch\nmodel: opus";
+        assert_eq!(fm_field(fm, "name"), "Arch");
+        assert_eq!(fm_field(fm, "model"), "opus");
+        assert_eq!(fm_field(fm, "color"), "");
+        assert_eq!(fm_field("names: x\nname: y", "name"), "y"); // 前缀精确
+    }
 }

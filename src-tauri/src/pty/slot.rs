@@ -184,9 +184,12 @@ impl TerminalSlot {
     pub fn write(&self, data: &[u8]) -> std::io::Result<()> {
         let master = self.pty_master.lock().expect("pty_master poisoned");
         if let Some(m) = master.as_ref() {
-            let mut m_ref = m;
-            m_ref.write_all(data)?;
-            m_ref.flush()?;
+            // portable-pty 0.8：MasterPty 不实现 std::io::Write，须 take_writer() 取 writer。
+            let mut w = m
+                .take_writer()
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+            w.write_all(data)?;
+            w.flush()?;
         }
         Ok(())
     }
@@ -276,5 +279,83 @@ impl TerminalSlot {
         *self.child_killer.lock().expect("child_killer poisoned") = Some(killer);
         *self.pid.lock().expect("pid poisoned") = pid;
         *self.spawned_at.lock().expect("spawned_at poisoned") = Some(Instant::now());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bytes(s: &str) -> Vec<u8> {
+        s.as_bytes().to_vec()
+    }
+
+    #[test]
+    fn ring_push_len() {
+        let mut rb = RingBuffer::new(1000);
+        rb.push(bytes("hello"));
+        rb.push(bytes(" world"));
+        assert_eq!(rb.len(), 11);
+    }
+
+    #[test]
+    fn ring_empty_push_ignored() {
+        let mut rb = RingBuffer::new(1000);
+        rb.push(Vec::new());
+        assert_eq!(rb.len(), 0);
+    }
+
+    #[test]
+    fn ring_trim_keeps_tail() {
+        let mut rb = RingBuffer::new(100);
+        rb.push(bytes(&"0123456789".repeat(20))); // 200 > 1.1*100 → 裁到 100
+        assert_eq!(rb.len(), 100);
+        let full = "0123456789".repeat(20);
+        assert_eq!(rb.replay(), &full.as_bytes()[full.len() - 100..]);
+    }
+
+    #[test]
+    fn ring_trim_multichunk_correct() {
+        let mut rb = RingBuffer::new(50);
+        rb.push(bytes("AAAA"));
+        rb.push(bytes(&"BBBB".repeat(10)));
+        rb.push(bytes(&"CCCC".repeat(10))); // 84 > 55 → 裁
+        assert_eq!(rb.len(), 50);
+        let full = format!("{}{}{}", "AAAA", "BBBB".repeat(10), "CCCC".repeat(10));
+        assert_eq!(rb.replay(), &full.as_bytes()[full.len() - 50..]);
+    }
+
+    #[test]
+    fn ring_replay_cache_idempotent() {
+        let mut rb = RingBuffer::new(1000);
+        rb.push(bytes("cache"));
+        let r1 = rb.replay();
+        let r2 = rb.replay();
+        assert_eq!(r1, r2);
+    }
+
+    #[test]
+    fn ring_push_invalidates_cache() {
+        let mut rb = RingBuffer::new(1000);
+        rb.push(bytes("a"));
+        let _ = rb.replay();
+        rb.push(bytes("b"));
+        assert_eq!(rb.replay(), b"ab".to_vec());
+    }
+
+    #[test]
+    fn ring_clear_empties() {
+        let mut rb = RingBuffer::new(1000);
+        rb.push(bytes("xyz"));
+        rb.clear();
+        assert_eq!(rb.len(), 0);
+        assert!(rb.replay().is_empty());
+    }
+
+    #[test]
+    fn ring_no_trim_under_threshold() {
+        let mut rb = RingBuffer::new(100);
+        rb.push(bytes(&"x".repeat(50))); // 50 <= 110 不裁
+        assert_eq!(rb.len(), 50);
     }
 }

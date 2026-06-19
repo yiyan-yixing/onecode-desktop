@@ -6,7 +6,7 @@ on:
 
 jobs:
   build:
-    name: Build (${{ matrix.os }})
+    name: Build (${{ matrix.label }})
     strategy:
       fail-fast: false
       matrix:
@@ -15,6 +15,8 @@ jobs:
             label: macos
           - os: ubuntu-22.04
             label: linux
+          - os: windows-2022
+            label: windows
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -40,15 +42,17 @@ jobs:
         run: |
           npm install
           npm run copy-static
+        shell: bash
 
-      # TODO(P1): 首次需先生成应用图标，否则 tauri build 因缺 icon 失败：
+      # 首次需先生成应用图标，否则 tauri build 因缺 icon 失败：
       #   npx @tauri-apps/cli icon ./app-icon.png
-      - name: Build bundle (dmg / AppImage)
+      - name: Build bundle
         run: npm run build
 
       - uses: actions/upload-artifact@v4
         with:
           name: onecode-desktop-${{ matrix.label }}
           path: |
-            src-tauri/target/release/bundle/**
+            target/release/bundle/**
             !**/*.dSYM
+            !**/*.pdb

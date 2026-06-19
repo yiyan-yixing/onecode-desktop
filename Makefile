@@ -24,5 +24,5 @@ fmt:
 
 # ── 清理 ────────────────────────────────────────────────────────────
 clean:
-	rm -rf src-tauri/target dist
+	rm -rf target dist
 	rm -f static/* && touch static/.gitkeep

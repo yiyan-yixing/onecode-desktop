@@ -127,10 +127,10 @@ export class MentionController {
 
   _select(el) {
     const aid = el.dataset.agent;
+    // 先捕获 prefix 长度（hide 会清空 this.prefix），N 含 '@'
+    const n = this.prefix.length + 1;
     this.hide();
     if (!aid) return;
-    // 清除已输入的 @prefix：N = prefix.length + 1（含 @）
-    const n = this.prefix.length + 1;
     if (n > 0) this.sendInput(BACKSPACE.repeat(n));
     this.sendInput(`@${aid} `);
     this.term.focus();
