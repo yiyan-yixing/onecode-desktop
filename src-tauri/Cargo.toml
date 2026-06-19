@@ -1,0 +1,51 @@
+[package]
+name = "onecode-desktop"
+version = "0.1.0"
+description = "OneCode Desktop — native multi-terminal client built on Claude Code"
+authors = ["yiyan-yixing"]
+license = "MIT"
+edition = "2021"
+rust-version = "1.77"
+
+# Tauri v2 需要库产物（mobile/desktop 共用入口）
+[lib]
+name = "onecode_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-shell = "2"
+
+# PTY — WezTerm 维护的跨平台伪终端
+portable-pty = "0.8"
+
+# 会话持久化（bundled 自带 SQLite，免系统依赖）
+rusqlite = { version = "0.31", features = ["bundled"] }
+
+# 序列化 / IPC
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+
+# 异步运行时（Tauri v2 内置，显式声明所需 feature）
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros", "io-util", "fs"] }
+
+# 错误处理 / 日志
+anyhow = "1"
+thiserror = "1"
+log = "0.4"
+
+[features]
+# Tauri 自定义协议（生产构建用）
+custom-protocol = ["tauri/custom-protocol"]
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

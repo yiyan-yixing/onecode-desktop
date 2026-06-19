@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OneCode Desktop</title>
+  <link rel="stylesheet" href="static/xterm.css">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app">
+    <!-- Title bar -->
+    <header class="titlebar">
+      <div class="titlebar-brand">
+        <div class="brand-icon">OC</div>
+        <span class="brand-name">OneCode</span>
+      </div>
+      <div class="titlebar-spacer"></div>
+      <div class="titlebar-hint">多终端 · AI 原生 IDE</div>
+    </header>
+
+    <!-- Tab bar -->
+    <nav class="tab-bar" id="tabBar">
+      <button class="tab-new" id="tabNew" title="新建终端 (Ctrl/Cmd + T)">+</button>
+    </nav>
+
+    <!-- Terminal panel -->
+    <main class="term-panel">
+      <div class="term-container" id="termContainer"></div>
+      <div class="term-empty" id="termEmpty" style="display:none">
+        <div class="empty-icon">⌘</div>
+        <div class="empty-text">按 <kbd>Ctrl/Cmd</kbd> + <kbd>T</kbd> 新建终端</div>
+      </div>
+    </main>
+
+    <!-- Status bar -->
+    <footer class="statusbar">
+      <div class="statusbar-item">
+        <span class="statusbar-dot" id="statusDot"></span>
+        <span id="statusText">就绪</span>
+      </div>
+      <div class="statusbar-spacer"></div>
+      <div class="statusbar-item" id="statusCount">0 终端</div>
+      <div class="statusbar-item">Claude Code 内核</div>
+    </footer>
+  </div>
+
+  <!-- xterm.js + addons (UMD globals, synced by scripts/copy-static.sh) -->
+  <script src="static/xterm.min.js"></script>
+  <script src="static/addon-fit.min.js"></script>
+  <script src="static/addon-web-links.min.js"></script>
+  <script src="static/addon-webgl.min.js"></script>
+
+  <script type="module" src="main.js"></script>
+</body>
+</html>

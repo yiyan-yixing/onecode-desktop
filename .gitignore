@@ -1,0 +1,38 @@
+# Dependencies
+/node_modules/
+
+# Rust / Cargo
+/src-tauri/target/
+**/*.rs.bk
+
+# Tauri generated
+/src-tauri/gen/
+
+# Generated static assets (synced from node_modules by scripts/copy-static.sh)
+/src/static/*
+!/src/static/.gitkeep
+
+# Build output
+/dist/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs
+*.log
+npm-debug.log*
+
+# Env
+.env
+.env.*
+!.env.example
+
+# Local settings
+.claude/settings.local.json

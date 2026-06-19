@@ -1,0 +1,362 @@
+/* ═══════════════════════════════════════════════════════
+   OneCode Desktop · Cowork 暖色终端主题
+   暖色 UI 框架（cream/linen/sand）包裹深色终端块（void/abyss）。
+   色值提取自 desktop-prototype.html。
+   ═══════════════════════════════════════════════════════ */
+
+:root {
+  /* ── Warm Surface Layers ── */
+  --cream: #F8F6F1;
+  --linen: #F2EFEA;
+  --sand: #EAE6DF;
+  --stone: #DDD9D0;
+  --clay: #C5BFB4;
+
+  /* ── Terminal Depths (dark prompt blocks) ── */
+  --void: #111119;
+  --abyss: #16161F;
+  --deep: #1C1C28;
+  --surface: #222230;
+  --raised: #2A2A3A;
+  --elevated: #343446;
+
+  /* ── Warm Emerald ── */
+  --em: #059669;
+  --em-bright: #10B981;
+  --em-glow: rgba(16, 185, 129, 0.18);
+
+  /* ── Cowork Accent ── */
+  --lavender: #A78BFA;
+  --peach: #F9A875;
+  --rose: #F472B6;
+  --sky: #7DD3FC;
+
+  /* ── Text on Warm ── */
+  --tx-warm: #2D2A24;
+  --tx-warm2: #5C584E;
+  --tx-warm3: #8C867A;
+
+  /* ── Text on Dark ── */
+  --tx: #D4DFF0;
+  --tx2: #8B9FC0;
+
+  /* ── System ── */
+  --r: 10px;
+  --r-sm: 6px;
+  --bd: rgba(45, 42, 36, 0.08);
+  --font-ui: 'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --font-term: 'JetBrains Mono', 'SF Mono', 'Fira Code', Consolas, monospace;
+  --transition: 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  overflow: hidden;
+  background: var(--cream);
+  color: var(--tx-warm);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── Subtle warm texture ── */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 60% 40% at 10% 20%, rgba(167, 139, 250, 0.04) 0%, transparent 50%),
+    radial-gradient(ellipse 50% 50% at 90% 80%, rgba(249, 168, 117, 0.03) 0%, transparent 40%),
+    radial-gradient(ellipse 80% 60% at 50% 50%, rgba(5, 150, 105, 0.02) 0%, transparent 60%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  position: relative;
+  z-index: 1;
+}
+
+/* ══════════ Title bar ══════════ */
+
+.titlebar {
+  display: flex;
+  align-items: center;
+  height: 48px;
+  background: var(--linen);
+  border-bottom: 1px solid var(--sand);
+  padding: 0 16px;
+  gap: 10px;
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.titlebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.brand-icon {
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  background: linear-gradient(135deg, var(--void), var(--deep));
+  color: var(--em-bright);
+  font-family: var(--font-term);
+  font-weight: 700;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 8px rgba(17, 17, 25, 0.18);
+}
+
+.brand-name {
+  font-weight: 600;
+  color: var(--tx-warm);
+  letter-spacing: 0.2px;
+}
+
+.titlebar-spacer {
+  flex: 1;
+}
+
+.titlebar-hint {
+  font-size: 11px;
+  color: var(--tx-warm3);
+  letter-spacing: 0.3px;
+}
+
+/* ══════════ Tab bar ══════════ */
+
+.tab-bar {
+  display: flex;
+  align-items: center;
+  height: 38px;
+  background: var(--linen);
+  border-bottom: 1px solid var(--sand);
+  padding: 0 8px;
+  gap: 4px;
+  flex-shrink: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.tab-bar::-webkit-scrollbar {
+  display: none;
+}
+
+.tab-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 28px;
+  padding: 0 12px;
+  border-radius: 7px;
+  cursor: pointer;
+  color: var(--tx-warm2);
+  background: transparent;
+  font-size: 12.5px;
+  white-space: nowrap;
+  transition: var(--transition);
+  position: relative;
+  flex-shrink: 0;
+}
+
+.tab-item:hover {
+  background: var(--sand);
+  color: var(--tx-warm);
+}
+
+.tab-item.active {
+  background: var(--void);
+  color: var(--tx);
+}
+
+.tab-item.active:hover {
+  background: var(--void);
+}
+
+/* 状态点 */
+.tab-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  transition: var(--transition);
+}
+.tab-dot.running {
+  background: var(--em-bright);
+  box-shadow: 0 0 6px var(--em-glow);
+}
+.tab-dot.exited {
+  background: var(--clay);
+}
+.tab-dot.crashed {
+  background: #ef4444;
+}
+
+.tab-item.exited .tab-dot.exited {
+  cursor: pointer;
+}
+.tab-item.exited .tab-label {
+  opacity: 0.7;
+}
+
+.tab-label {
+  user-select: none;
+}
+
+.tab-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  font-size: 14px;
+  line-height: 1;
+  opacity: 0;
+  color: var(--tx-warm3);
+  transition: var(--transition);
+}
+.tab-item:hover .tab-close {
+  opacity: 0.6;
+}
+.tab-close:hover {
+  background: rgba(239, 68, 68, 0.15);
+  color: #ef4444;
+  opacity: 1;
+}
+.tab-item.active .tab-close {
+  color: var(--tx2);
+}
+
+.tab-rename-input {
+  font: inherit;
+  font-size: 12.5px;
+  background: var(--cream);
+  color: var(--tx-warm);
+  border: 1px solid var(--em-bright);
+  border-radius: 4px;
+  padding: 1px 4px;
+  outline: none;
+  width: 110px;
+}
+
+.tab-new {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--tx-warm2);
+  font-size: 18px;
+  cursor: pointer;
+  transition: var(--transition);
+  flex-shrink: 0;
+}
+.tab-new:hover {
+  background: var(--em-bright);
+  color: #fff;
+}
+
+/* ══════════ Terminal panel ══════════ */
+
+.term-panel {
+  flex: 1;
+  position: relative;
+  background: var(--void);
+  overflow: hidden;
+}
+
+.term-container {
+  position: absolute;
+  inset: 0;
+}
+
+.term-instance {
+  position: absolute;
+  inset: 0;
+  padding: 8px 4px 8px 12px;
+}
+
+.term-instance .xterm {
+  height: 100%;
+}
+
+.term-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  color: var(--tx2);
+  background: var(--void);
+}
+.empty-icon {
+  font-size: 40px;
+  opacity: 0.4;
+}
+.empty-text {
+  font-size: 13px;
+  opacity: 0.6;
+}
+.empty-text kbd {
+  font-family: var(--font-term);
+  background: var(--raised);
+  border: 1px solid var(--elevated);
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-size: 11px;
+}
+
+/* ══════════ Status bar ══════════ */
+
+.statusbar {
+  display: flex;
+  align-items: center;
+  height: 26px;
+  background: var(--linen);
+  border-top: 1px solid var(--sand);
+  padding: 0 14px;
+  gap: 16px;
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--tx-warm3);
+  user-select: none;
+}
+
+.statusbar-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  letter-spacing: 0.2px;
+}
+
+.statusbar-spacer {
+  flex: 1;
+}
+
+.statusbar-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--em-bright);
+  box-shadow: 0 0 5px var(--em-glow);
+}

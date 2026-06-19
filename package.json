@@ -1,0 +1,21 @@
+{
+  "name": "onecode-desktop",
+  "version": "0.1.0",
+  "description": "OneCode Desktop — 原生桌面客户端，一个窗口管理多个 AI 终端",
+  "private": true,
+  "scripts": {
+    "copy-static": "bash scripts/copy-static.sh",
+    "tauri": "tauri",
+    "dev": "tauri dev",
+    "build": "tauri build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.1.0",
+    "@xterm/xterm": "^5.5.0",
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/addon-web-links": "^0.11.0",
+    "@xterm/addon-webgl": "^0.18.0",
+    "marked": "^12.0.2",
+    "highlight.js": "^11.10.0"
+  }
+}
