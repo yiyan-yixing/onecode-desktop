@@ -1,28 +1,77 @@
-// 应用入口：会话恢复 + 多终端 Tab + CC Status 徽章 + 全局快捷键 + 生命周期接线。
+// 应用入口：Cowork Shell + Orbital + Palette + CC Status + 全局快捷键 + 生命周期接线。
+
+// Dev-mode console noise filter: suppress harmless Tauri IPC warnings that
+// appear during hot-reload (callback id mismatch, custom protocol fallback).
+// These are inherent to dev mode and never occur in production builds.
+if (typeof window !== 'undefined') {
+  const _origWarn = console.warn;
+  console.warn = function (...args) {
+    const msg = args.join(' ');
+    if (
+      msg.includes("Couldn't find callback id") ||  // hot-reload: old IPC promises orphaned
+      msg.includes('IPC custom protocol failed')    // WKWebView: auto-fallback to postMessage
+    ) return;
+    _origWarn.apply(this, args);
+  };
+}
 
 import { TabManager } from './terminal/tab-manager.js';
+import { OrbitalController } from './orbital.js';
+import { PaletteController } from './palette.js';
+import { RippleController } from './ripple.js';
 import { CcStatusView } from './cc-status.js';
 import * as ipc from './ipc-bridge.js';
-
 const tabManager = new TabManager();
+const orbital = new OrbitalController();
+const palette = new PaletteController();
+const ripple = new RippleController();
 let ccView = null;
 
 async function init() {
+  // Tab + Orbital + Palette
   tabManager.init();
-  tabManager.onChange = updateStatusbar;
+  tabManager.orbital = orbital;
+  tabManager.ripple = ripple;
+  orbital.init(tabManager);
+  palette.init(tabManager);
+  ripple.init();
+  tabManager.onChange = (tm) => {
+    updateStatusbar(tm);
+    orbital._loadProjects(); // refresh project list (hides cards with no terminals)
+  };
+
   initKeybindings(tabManager);
 
-  // CC Status 徽章 + @mention agent 数据源
+  // CC Status — badges in statusbar
   ccView = new CcStatusView({
-    badgeRoot: document.getElementById('ccBadges'),
+    badgeRoot: document.getElementById('ribbonBadges'),
     getProjectDir: () => tabManager.getActiveCwd(),
   });
   ccView.onAgents = (agents) => {
     tabManager.agentProvider = () => agents;
+    orbital.setAgentProvider(() => agents);
+    palette.setAgentProvider(() => agents);
+  };
+  ccView.onStatus = (data) => {
+    // Also update statusbar badges
+    updateStatusbarBadges(data);
   };
   ccView.start();
 
-  // 启动恢复（无记录则建默认 main）
+  // Empty orb click → create first terminal
+  document.getElementById('emptyOrb')?.addEventListener('click', () => {
+    const orb = document.getElementById('emptyOrb');
+    if (orb) orb.classList.add('exploding');
+    setTimeout(() => tabManager.createTab(), 400);
+  });
+
+  // Sidebar toggle button in titlebar
+  document.getElementById('sidebarToggle')?.addEventListener('click', () => {
+    const sidebar = document.getElementById('orbital');
+    if (sidebar) sidebar.classList.toggle('collapsed');
+  });
+
+  // Session restore
   try {
     const slots = await ipc.sessionRestore();
     await tabManager.restoreOrInit(slots);
@@ -31,58 +80,99 @@ async function init() {
     await tabManager.restoreOrInit(null);
   }
 
-  // 生命周期 / 托盘事件
+  // Lifecycle
   ipc.onTrayNewTerminal(() => tabManager.createTab());
   ipc.onAppBeforeQuit(() => tabManager.persistNow());
   ipc.onHealthReport((reports) => showHealthWarning(reports));
 }
 
 function updateStatusbar(tm) {
-  const countEl = document.getElementById('statusCount');
-  const textEl = document.getElementById('statusText');
-  if (countEl) countEl.textContent = `${tm.tabs.size} 终端`;
+  const countEl = document.getElementById('ribbonCount');
+  const statusEl = document.getElementById('ribbonStatus');
+  if (countEl) countEl.textContent = `${tm.tabs.size} terminals`;
   const active = tm.activeId ? tm.tabs.get(tm.activeId) : null;
-  if (textEl && active) {
-    textEl.textContent =
-      active.status === 'exited'
-        ? `${active.label} · 已退出`
-        : active.label;
+  if (statusEl && active) {
+    statusEl.textContent = active.status === 'exited'
+      ? `${active.label} · exited`
+      : active.label;
   }
 }
+
+function updateStatusbarBadges(data) {
+  const root = document.getElementById('ribbonBadges');
+  if (!root) return;
+  const items = [
+    { key: 'skills', count: (data.skills || []).length, icon: ICONS.skills },
+    { key: 'hooks', count: data.hooks ? Object.values(data.hooks).reduce((a, v) => a + v.length, 0) : 0, icon: ICONS.hooks },
+    { key: 'plugins', count: (data.plugins || []).length, icon: ICONS.plugins },
+    { key: 'tasks', count: (data.tasks || []).length, icon: ICONS.tasks },
+  ];
+  const keys = ['skills', 'hooks', 'plugins', 'tasks'];
+  for (const t of keys) {
+    const badge = root.querySelector(`[data-cc="${t}"]`);
+    const n = items.find(i => i.key === t)?.count || 0;
+    if (badge) {
+      const numEl = badge.querySelector('.n');
+      if (numEl && numEl.textContent !== String(n)) numEl.textContent = n;
+      badge.classList.toggle('has', n > 0);
+    }
+  }
+  if (!root.querySelector('[data-cc]')) {
+    root.innerHTML = items.map(it =>
+      `<span class="ribbon-badge ${it.count > 0 ? 'has' : ''}" data-cc="${it.key}">${it.icon}<span class="n">${it.count}</span></span>`
+    ).join('');
+  }
+}
+
+const ICONS = {
+  skills: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" style="width:10px;height:10px"><path d="M8 1l2 4 4.5.7-3.3 3.1.8 4.5L8 11l-4 2.3.8-4.5L1.5 5.7 6 5z"/></svg>',
+  hooks: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" style="width:10px;height:10px"><path d="M6 2v4l-3 3v2h4v3l1 2 1-2v-3h4V9l-3-3V2"/><rect x="5" y="1" width="6" height="2" rx="1"/></svg>',
+  plugins: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" style="width:10px;height:10px"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/></svg>',
+  tasks: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" style="width:10px;height:10px"><circle cx="8" cy="8" r="6"/><polyline points="8 4 8 8 11 9.5"/></svg>',
+};
 
 function showHealthWarning(reports) {
   const el = document.getElementById('healthWarn');
   if (!el) return;
-  const warn = reports.find(
-    (r) => r.action === 'warn' || r.action === 'stale' || r.action === 'kill',
-  );
-  if (!warn) {
-    el.classList.remove('on');
-    el.textContent = '';
-    return;
-  }
-  const tip =
-    warn.action === 'warn'
-      ? `${shortLabel(warn)} RSS 偏高`
-      : warn.action === 'kill'
-        ? `${shortLabel(warn)} 进程僵尸`
-        : `${shortLabel(warn)} 进程异常`;
+  const warn = reports.find(r => r.action === 'warn' || r.action === 'stale' || r.action === 'kill');
+  if (!warn) { el.classList.remove('on'); el.textContent = ''; return; }
+  const tip = warn.action === 'warn'
+    ? `#${warn.pid || '?'} RSS 偏高`
+    : warn.action === 'kill'
+      ? `#${warn.pid || '?'} 进程僵尸`
+      : `#${warn.pid || '?'} 进程异常`;
   el.textContent = '⚠ ' + tip;
   el.classList.add('on');
-}
-
-function shortLabel(r) {
-  return r.pid ? `#${r.pid}` : '终端';
 }
 
 function initKeybindings(tm) {
   const mod = navigator.platform.includes('Mac') ? 'metaKey' : 'ctrlKey';
   window.addEventListener('keydown', (e) => {
+    // Cmd+K → toggle palette
+    if (e[mod] && e.key.toLowerCase() === 'k') {
+      e.preventDefault();
+      palette.toggle();
+      return;
+    }
+    // Cmd+B → toggle sidebar
+    if (e[mod] && e.key.toLowerCase() === 'b') {
+      e.preventDefault();
+      const sidebar = document.getElementById('orbital');
+      if (sidebar) sidebar.classList.toggle('collapsed');
+      return;
+    }
     if (!e[mod]) return;
     const key = e.key.toLowerCase();
     if (key === 't') {
       e.preventDefault();
-      tm.createTab();
+      if (e.shiftKey) {
+        // Shift+Cmd+T → New Chat in current project context
+        const cwd = tm.getActiveCwd() || undefined;
+        tm.createTab({ cwd });
+      } else {
+        // Cmd+T → New Chat (default cwd)
+        tm.createTab();
+      }
       return;
     }
     if (key === 'w') {

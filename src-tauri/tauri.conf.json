@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "OneCode · AI 原生 IDE",
+        "title": "",
         "width": 1200,
         "height": 800,
         "minWidth": 800,
@@ -21,7 +21,9 @@
         "decorations": true,
         "transparent": false,
         "resizable": true,
-        "fullscreen": false
+        "fullscreen": false,
+        "devtools": true,
+        "titleBarStyle": "Overlay"
       }
     ],
     "security": {

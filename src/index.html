@@ -1,56 +1,86 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="dark">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>OneCode Desktop</title>
+  <title>OneCode</title>
   <link rel="stylesheet" href="static/xterm.css">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <div class="app">
-    <!-- Title bar -->
-    <header class="titlebar">
-      <div class="titlebar-brand">
-        <div class="brand-icon">OC</div>
-        <span class="brand-name">OneCode</span>
+  <!-- Cowork Shell: titlebar + content + statusbar -->
+  <div class="app" id="app">
+
+    <!-- Title Bar -->
+    <div class="titlebar" id="titlebar" data-tauri-drag-region>
+      <button class="titlebar-btn" id="sidebarToggle" title="折叠/展开侧边栏 (⌘B)">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="2" y="2" width="12" height="12" rx="2"/>
+          <line x1="6" y1="2" x2="6" y2="14"/>
+        </svg>
+      </button>
+    </div>
+
+    <!-- Main Content: Sidebar + Terminal -->
+    <div class="content">
+      <!-- Sidebar (warm, left) -->
+      <nav class="sidebar" id="orbital"></nav>
+
+      <!-- Terminal Panel (dark) -->
+      <div class="term-panel">
+        <div class="term-viewport" id="termViewport"></div>
+        <!-- Empty state -->
+        <div class="term-empty" id="termEmpty">
+          <div class="empty-orb" id="emptyOrb">
+            <span class="empty-orb-icon">{ }</span>
+          </div>
+          <div class="empty-title">OneCode</div>
+          <div class="empty-subtitle">AI-native development environment</div>
+          <div class="empty-kbd">
+            <kbd>⌘K</kbd> <span>to begin</span>
+          </div>
+        </div>
       </div>
-      <div class="titlebar-spacer"></div>
-      <div class="titlebar-hint">多终端 · AI 原生 IDE</div>
-    </header>
+    </div>
 
-    <!-- Tab bar -->
-    <nav class="tab-bar" id="tabBar">
-      <button class="tab-new" id="tabNew" title="新建终端 (Ctrl/Cmd + T)">+</button>
-    </nav>
-
-    <!-- Terminal panel -->
-    <main class="term-panel">
-      <div class="term-container" id="termContainer"></div>
-      <!-- @mention 弹窗（共享，活跃终端可见时显示） -->
-      <div class="mention-pop" id="mentionPop"></div>
-      <div class="term-empty" id="termEmpty" style="display:none">
-        <div class="empty-icon">⌘</div>
-        <div class="empty-text">按 <kbd>Ctrl/Cmd</kbd> + <kbd>T</kbd> 新建终端</div>
-      </div>
-    </main>
-
-    <!-- Status bar -->
-    <footer class="statusbar">
+    <!-- Status Bar -->
+    <footer class="statusbar" id="ribbon">
       <div class="statusbar-item">
-        <span class="statusbar-dot" id="statusDot"></span>
-        <span id="statusText">就绪</span>
+        <span class="statusbar-dot" id="ribbonDot"></span>
+        <span id="ribbonStatus">Ready</span>
       </div>
-      <span class="statusbar-warn" id="healthWarn"></span>
+      <span class="ribbon-warn" id="healthWarn"></span>
+      <div class="statusbar-item" id="ribbonCount">0</div>
+      <div class="ribbon-badges" id="ribbonBadges"></div>
       <div class="statusbar-spacer"></div>
-      <!-- CC Status 徽章（skills/hooks/plugins/tasks） -->
-      <div class="statusbar-item cc-badges" id="ccBadges"></div>
-      <div class="statusbar-item" id="statusCount">0 终端</div>
-      <div class="statusbar-item">Claude Code 内核</div>
+      <span class="statusbar-kbd">⌘B</span> <span style="margin-right:6px">Sidebar</span>
+      <span class="statusbar-kbd">⌘T</span> <span style="margin-right:6px">New</span>
+      <span class="statusbar-kbd">⇧⌘T</span> <span style="margin-right:6px">New in Project</span>
+      <span class="statusbar-kbd">⌘W</span> <span style="margin-right:6px">Close</span>
+      <span class="statusbar-kbd">⌘1-9</span> <span>Switch</span>
     </footer>
   </div>
 
-  <!-- xterm.js + addons (UMD globals, synced by scripts/copy-static.sh) -->
+  <!-- Floating: Command Palette (Cmd+K) -->
+  <div class="palette-overlay" id="paletteOverlay">
+    <div class="palette" id="palette">
+      <div class="palette-search">
+        <input type="text" class="palette-input" id="paletteInput" placeholder="type a command or search…" autocomplete="off" spellcheck="false">
+      </div>
+      <div class="palette-results" id="paletteResults"></div>
+      <div class="palette-footer">
+        <span class="palette-hint"><kbd>↑↓</kbd> navigate  <kbd>↵</kbd> select  <kbd>⎋</kbd> close</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Floating: @Mention Portal -->
+  <div class="mention-portal" id="mentionPortal"></div>
+
+  <!-- Floating: Notification Ripples -->
+  <div class="ripple-layer" id="rippleLayer"></div>
+
+  <!-- xterm.js + addons (UMD globals) -->
   <script src="static/xterm.min.js"></script>
   <script src="static/addon-fit.min.js"></script>
   <script src="static/addon-web-links.min.js"></script>
