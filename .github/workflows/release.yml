@@ -5,19 +5,9 @@ on:
     tags: ['v*']
 
 jobs:
-  build:
-    name: Build (${{ matrix.label }})
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: macos-13
-            label: macos
-          - os: ubuntu-22.04
-            label: linux
-          - os: windows-2022
-            label: windows
-    runs-on: ${{ matrix.os }}
+  build-mac:
+    name: Build macOS (Apple Silicon)
+    runs-on: macos-14
 
     steps:
       - uses: actions/checkout@v4
@@ -28,31 +18,28 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      - name: Install Tauri system deps (Linux)
-        if: matrix.os == 'ubuntu-22.04'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libgtk-3-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev
-
       - name: Install frontend deps & sync static assets
         run: |
           npm install
           npm run copy-static
-        shell: bash
 
-      # 首次需先生成应用图标，否则 tauri build 因缺 icon 失败：
-      #   npx @tauri-apps/cli icon ./app-icon.png
       - name: Build bundle
         run: npm run build
 
+      # TODO: Apple code signing — 需配置 APPLE_CERTIFICATE 等 secrets
+      # - name: Sign app
+      #   run: ...
+
+      - name: Get version
+        id: version
+        run: echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
       - uses: actions/upload-artifact@v4
         with:
-          name: onecode-desktop-${{ matrix.label }}
-          path: |
-            target/release/bundle/**
-            !**/*.dSYM
-            !**/*.pdb
+          name: onecode-desktop-macos-arm64
+          path: target/release/bundle/dmg/*.dmg
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: target/release/bundle/dmg/*.dmg
