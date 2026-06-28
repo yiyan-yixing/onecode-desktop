@@ -8,10 +8,10 @@
 //! - 自动重启：移植自 pty.js:135-164 的指数退避（500ms × 2^n，上限 30s，10 次封顶，
 //!   稳定运行 5s 重置）。
 
-mod slot;
 pub mod health;
+mod slot;
 
-pub use slot::{TerminalSlot, RingBuffer, SlotStatus, RING_BUFFER_MAX_BYTES};
+pub use slot::{SlotStatus, TerminalSlot};
 
 use std::collections::HashMap;
 use std::io::Read;
@@ -20,9 +20,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, Result};
-use portable_pty::{
-    native_pty_system, Child, ChildKiller, CommandBuilder, ExitStatus, MasterPty, PtySize,
-};
+use portable_pty::{native_pty_system, Child, ChildKiller, CommandBuilder, MasterPty, PtySize};
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Emitter};
 use tokio::runtime::Handle;
@@ -35,10 +33,10 @@ use crate::events;
 /// PTY 初始尺寸（对齐 pty.js DEFAULT_COLS/ROWS）
 const DEFAULT_COLS: u16 = 200;
 const DEFAULT_ROWS: u16 = 50;
-/// 批量合并窗口（~60fps，与屏幕刷新对齐）
-const FLUSH_INTERVAL_MS: u64 = 16;
-/// 超过此阈值立即推送（不等定时器，避免大块输出卡 16ms）
-const FLUSH_IMMEDIATE_BYTES: usize = 32 * 1024;
+/// 批量合并窗口（~30fps，降低渲染频率减轻 WKWebView 闪烁）
+const FLUSH_INTERVAL_MS: u64 = 33;
+/// 超过此阈值立即推送（不等定时器，避免大块输出卡住）
+const FLUSH_IMMEDIATE_BYTES: usize = 64 * 1024;
 /// mpsc channel 容量
 const PTY_CHAN_CAPACITY: usize = 256;
 /// 自动重启次数上限（对齐 pty.js）
@@ -50,6 +48,7 @@ const STABLE_RESET_SECS: u64 = 5;
 pub struct SlotSummary {
     pub id: String,
     pub label: String,
+    pub project_id: Option<String>,
     pub status: String,
     pub pid: Option<u32>,
     pub exit_code: Option<i32>,
@@ -58,11 +57,12 @@ pub struct SlotSummary {
 }
 
 /// 终端配置快照（会话持久化用）。不含运行时状态（pid/status/ring buffer），
-/// 仅保留重 spawn 所需的 {id,label,cmd,args,cwd,env,created_at}。
+/// 仅保留重 spawn 所需的 {id,label,project_id,cmd,args,cwd,env,created_at}。
 #[derive(serde::Serialize, Clone)]
 pub struct SlotConfig {
     pub id: String,
     pub label: String,
+    pub project_id: Option<String>,
     pub cmd: String,
     pub args: Vec<String>,
     pub cwd: String,
@@ -97,6 +97,7 @@ impl MultiPtyManager {
     }
 
     /// 当前终端数（容量检查用）
+    #[allow(dead_code)]
     pub async fn slot_count(&self) -> usize {
         self.inner.read().await.slots.len()
     }
@@ -116,29 +117,35 @@ impl MultiPtyManager {
         env: HashMap<String, String>,
         data_channel: Channel<Vec<u8>>,
         label: Option<String>,
+        project_id: Option<String>,
     ) -> Result<(Uuid, Option<u32>)> {
         {
             let inner = self.inner.read().await;
             if inner.slots.len() >= self.config.max_terminals {
-                return Err(anyhow!(
-                    "已达最大终端数 ({})",
-                    self.config.max_terminals
-                ));
+                return Err(anyhow!("已达最大终端数 ({})", self.config.max_terminals));
             }
         }
 
         let id = Uuid::new_v4();
-        let label = label.unwrap_or_else(|| format!("term-{}", short_suffix(id)));
+        let label = label.unwrap_or_else(|| "New Chat".to_string());
         let ring_max = self.config.ring_buffer_max_mb * 1024 * 1024;
-        let slot = Arc::new(TerminalSlot::new(
-            id, label, cmd, args, cwd, env, ring_max,
-        ));
+        let slot = Arc::new(TerminalSlot::new(id, label, project_id, cmd, args, cwd, env, ring_max));
 
-        let PtyHandles { master, killer, reader, child, pid } =
-            create_pty(&slot.cmd, &slot.args, &slot.cwd, &slot.env)?;
+        let PtyHandles {
+            master,
+            killer,
+            reader,
+            child,
+            pid,
+        } = create_pty(&slot.cmd, &slot.args, &slot.cwd, &slot.env)?;
         slot.replace_handles(master, killer, pid);
 
-        start_reader_batcher(slot.clone(), data_channel.clone(), reader, self.runtime.clone());
+        start_reader_batcher(
+            slot.clone(),
+            data_channel.clone(),
+            reader,
+            self.runtime.clone(),
+        );
         start_wait(
             slot.clone(),
             data_channel.clone(),
@@ -174,7 +181,10 @@ impl MultiPtyManager {
     /// 手动重启：复用 cmd/args/cwd/env，清空 buffer，重置重启计数。
     /// 前端传入新的 data_channel（旧 Channel 已失效）。
     pub async fn restart(&self, id: Uuid, data_channel: Channel<Vec<u8>>) -> Result<()> {
-        let slot = self.get_slot(id).await.ok_or_else(|| anyhow!("slot not found"))?;
+        let slot = self
+            .get_slot(id)
+            .await
+            .ok_or_else(|| anyhow!("slot not found"))?;
 
         // 1. 标记关闭 → 旧 wait 线程退出（不自动重启）
         slot.mark_closed();
@@ -185,8 +195,13 @@ impl MultiPtyManager {
         tokio::time::sleep(Duration::from_millis(80)).await;
 
         // 4. 重新创建 PTY
-        let PtyHandles { master, killer, reader, child, pid } =
-            create_pty(&slot.cmd, &slot.args, &slot.cwd, &slot.env)?;
+        let PtyHandles {
+            master,
+            killer,
+            reader,
+            child,
+            pid,
+        } = create_pty(&slot.cmd, &slot.args, &slot.cwd, &slot.env)?;
         slot.replace_handles(master, killer, pid);
         slot.clear_buffer();
         slot.set_status(SlotStatus::Running);
@@ -194,7 +209,12 @@ impl MultiPtyManager {
         slot.closed.store(false, Ordering::SeqCst); // 新 wait 线程恢复正常自动重启
 
         // 5. 启动新 reader/batcher/wait
-        start_reader_batcher(slot.clone(), data_channel.clone(), reader, self.runtime.clone());
+        start_reader_batcher(
+            slot.clone(),
+            data_channel.clone(),
+            reader,
+            self.runtime.clone(),
+        );
         start_wait(
             slot.clone(),
             data_channel.clone(),
@@ -212,24 +232,36 @@ impl MultiPtyManager {
     // ── 读操作：读锁（可并发） ─────────────────────────────────────
 
     pub async fn write(&self, id: Uuid, data: Vec<u8>) -> Result<()> {
-        let slot = self.get_slot(id).await.ok_or_else(|| anyhow!("slot not found"))?;
+        let slot = self
+            .get_slot(id)
+            .await
+            .ok_or_else(|| anyhow!("slot not found"))?;
         slot.write(&data)?;
         Ok(())
     }
 
     pub async fn resize(&self, id: Uuid, cols: u16, rows: u16) -> Result<()> {
-        let slot = self.get_slot(id).await.ok_or_else(|| anyhow!("slot not found"))?;
+        let slot = self
+            .get_slot(id)
+            .await
+            .ok_or_else(|| anyhow!("slot not found"))?;
         slot.resize(cols, rows)?;
         Ok(())
     }
 
     pub async fn replay(&self, id: Uuid) -> Result<Vec<u8>> {
-        let slot = self.get_slot(id).await.ok_or_else(|| anyhow!("slot not found"))?;
+        let slot = self
+            .get_slot(id)
+            .await
+            .ok_or_else(|| anyhow!("slot not found"))?;
         Ok(slot.replay())
     }
 
     pub async fn rename(&self, id: Uuid, label: String) -> Result<()> {
-        let slot = self.get_slot(id).await.ok_or_else(|| anyhow!("slot not found"))?;
+        let slot = self
+            .get_slot(id)
+            .await
+            .ok_or_else(|| anyhow!("slot not found"))?;
         slot.rename(label);
         Ok(())
     }
@@ -248,6 +280,7 @@ impl MultiPtyManager {
             .map(|s| SlotConfig {
                 id: s.id.to_string(),
                 label: s.label(),
+                project_id: s.project_id.lock().expect("project_id poisoned").clone(),
                 cmd: s.cmd.clone(),
                 args: s.args.clone(),
                 cwd: s.cwd.clone(),
@@ -281,10 +314,11 @@ impl MultiPtyManager {
     }
 }
 
-fn summary_of(s: &TerminalSlot) -> SlotSummary {
+fn summary_of(s: &Arc<TerminalSlot>) -> SlotSummary {
     SlotSummary {
         id: s.id.to_string(),
         label: s.label(),
+        project_id: s.project_id.lock().expect("project_id poisoned").clone(),
         status: s.status().as_str().to_string(),
         pid: *s.pid.lock().expect("pid poisoned"),
         exit_code: *s.exit_code.lock().expect("exit_code poisoned"),
@@ -293,11 +327,43 @@ fn summary_of(s: &TerminalSlot) -> SlotSummary {
     }
 }
 
-/// 取 UUID 后 4 位 hex 作为默认标签后缀。
-fn short_suffix(id: Uuid) -> String {
-    let h = id.simple().to_string();
-    let len = h.len();
-    h[len.saturating_sub(4)..].to_string()
+// ── Claude Code auth 冲突修复 ────────────────────────────────────────
+
+/// 从 `~/.claude/settings.json` 的 `env` 节中移除 `ANTHROPIC_AUTH_TOKEN`。
+///
+/// Claude Code 启动时会读取此文件的 `env` 节并注入到进程环境中。
+/// 如果同时存在 `ANTHROPIC_API_KEY`（Wizard/Settings 配置）和 `ANTHROPIC_AUTH_TOKEN`，
+/// Anthropic SDK 会报 auth 冲突警告。
+/// 幂等操作：仅在 AUTH_TOKEN 存在时才写入文件，已移除则跳过。
+fn remove_auth_token_from_settings() {
+    let home = match std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")) {
+        Ok(h) => h,
+        Err(_) => return,
+    };
+    let path = std::path::PathBuf::from(&home).join(".claude/settings.json");
+    if !path.exists() {
+        return;
+    }
+    let content = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+    let mut settings: serde_json::Value = match serde_json::from_str(&content) {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+    let env_obj = match settings.get_mut("env").and_then(|v| v.as_object_mut()) {
+        Some(obj) => obj,
+        None => return,
+    };
+    if env_obj.remove("ANTHROPIC_AUTH_TOKEN").is_none() {
+        // AUTH_TOKEN 不存在，无需写入
+        return;
+    }
+    log::info!("[auth-fix] removing ANTHROPIC_AUTH_TOKEN from {}", path.display());
+    if let Ok(pretty) = serde_json::to_string_pretty(&settings) {
+        let _ = std::fs::write(&path, pretty);
+    }
 }
 
 // ── PTY 创建 / 后台任务 ────────────────────────────────────────────
@@ -335,8 +401,34 @@ fn create_pty(
         cb.cwd(cwd);
     }
     cb.env("TERM", "xterm-256color");
+
+    // macOS GUI 进程的 PATH 不含用户 shell 路径（~/.local/bin 等），
+    // 导致 "claude" 等安装在用户目录下的命令找不到。
+    // 策略：先尝试从登录+交互式 shell 获取完整 PATH，
+    // 若失败则拼合常见用户路径。始终确保子进程 PATH 包含 ~/.local/bin。
+    let resolved_path = resolve_full_path();
+    cb.env("PATH", resolved_path);
+
     for (k, v) in env {
         cb.env(k, v);
+    }
+
+    // 若子进程环境中同时存在 ANTHROPIC_API_KEY 和 ANTHROPIC_AUTH_TOKEN，
+    // Claude Code 会报 auth 冲突警告。策略：保留 API_KEY，移除 AUTH_TOKEN。
+    //
+    // AUTH_TOKEN 来源有三层（按优先级从高到低）：
+    // 1. ~/.claude/settings.json "env" 节 — Claude Code 启动时读取并注入（最常见）
+    // 2. macOS Keychain（claude /login 存入的 OAuth token）
+    // 3. 进程环境变量（继承自父进程 shell）
+    //
+    // 必须在全部三层都清除，否则任何一个来源都会重新注入 AUTH_TOKEN。
+    if cb.get_env("ANTHROPIC_API_KEY").is_some() {
+        // 第3层：移除进程环境变量中的 AUTH_TOKEN
+        cb.env_remove("ANTHROPIC_AUTH_TOKEN");
+        // 第2层：空字符串覆盖 keychain 的 OAuth token
+        cb.env("CLAUDE_CODE_OAUTH_TOKEN", "");
+        // 第1层：从 settings.json 的 env 节中移除 AUTH_TOKEN
+        remove_auth_token_from_settings();
     }
 
     // portable-pty 0.8：spawn_command 在 **slave** 上（不是 master.spawn(slave, cb)）。
@@ -353,7 +445,13 @@ fn create_pty(
         .try_clone_reader()
         .map_err(|e| anyhow!("clone_reader failed: {e}"))?;
 
-    Ok(PtyHandles { master, killer, reader, child, pid })
+    Ok(PtyHandles {
+        master,
+        killer,
+        reader,
+        child,
+        pid,
+    })
 }
 
 /// 启动 reader 线程 + batcher tokio 任务。
@@ -414,7 +512,7 @@ fn flush(channel: &Channel<Vec<u8>>, slot: &TerminalSlot, batch: &mut Vec<u8>) {
     }
     let data = std::mem::take(batch);
     slot.push_output(data.clone()); // 写 ring buffer（供 Tab 切换 replay）
-    let _ = channel.send(data);     // 推送到前端 xterm
+    let _ = channel.send(data); // 推送到前端 xterm
 }
 
 /// 启动退出监听线程：阻塞 child.wait()，崩溃则指数退避自动重启。
@@ -430,7 +528,11 @@ fn start_wait(
         // portable-pty 0.8: Child::wait(&mut self) -> IoResult<ExitStatus>，ExitStatus::success()
         let code = match child.wait() {
             Ok(status) => {
-                if status.success() { 0 } else { 1 }
+                if status.success() {
+                    0
+                } else {
+                    1
+                }
             }
             Err(_) => 1,
         };
@@ -465,14 +567,16 @@ fn start_wait(
 
         let new_count = slot.inc_restart();
         // 指数退避：500ms × 2^(new_count-1)，上限 30s（对齐 pty.js:156）
-        let exp = (new_count - 1).min(20) as u32;
+        let exp: u32 = (new_count - 1).min(20);
         let delay_ms = (500u64)
             .saturating_mul(1u64.checked_shl(exp).unwrap_or(u64::MAX / 2))
             .min(30000);
         slot.set_status(SlotStatus::Restarting);
         log::warn!(
             "[pty] auto-restart id={} attempt={} in {}ms",
-            slot.id, new_count, delay_ms
+            slot.id,
+            new_count,
+            delay_ms
         );
         std::thread::sleep(Duration::from_millis(delay_ms));
 
@@ -496,4 +600,56 @@ fn start_wait(
             }
         }
     });
+}
+
+/// 解析完整 PATH（确保 GUI 启动时子进程也能找到 claude 等用户安装的命令）。
+///
+/// macOS GUI 应用（从 Dock/Finder 启动）的 PATH 仅含系统目录，
+/// 不含 ~/.local/bin 等。单纯用 `$SHELL -l -c` 也不够，因为 login shell
+/// 只 source .zprofile，不 source .zshrc——而 ~/.local/bin 通常在 .zshrc 中设置。
+///
+/// 策略：
+/// 1. 尝试 `$SHELL -l -i -c 'echo $PATH'`（login + interactive，source .zshrc）
+/// 2. 若失败，尝试 `-l -c`（login only）
+/// 3. 若仍失败，拼合 HOME 下常见用户路径 + 系统 PATH
+/// 4. 最终兜底：确保 ~/.local/bin 一定在 PATH 中
+fn resolve_full_path() -> String {
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/Users/Shared".to_string());
+    let parent_path = std::env::var("PATH").unwrap_or_default();
+
+    // 尝试 login + interactive shell（会 source .zshrc，包含 nvm/fnm/bun 等 PATH）
+    for args in &[
+        &["-l", "-i", "-c", "echo $PATH"][..],
+        &["-l", "-c", "echo $PATH"],
+    ] {
+        if let Ok(output) = std::process::Command::new(&shell).args(*args).output() {
+            if output.status.success() {
+                let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !path.is_empty() && path.contains('/') {
+                    // 确保 ~/.local/bin 在 PATH 中（某些 .zshrc 可能不设置它）
+                    return ensure_local_bin(&path, &home);
+                }
+            }
+        }
+    }
+
+    // 回退：父进程 PATH + 常见用户路径
+    let fallback = format!(
+        "{home}/.local/bin:{home}/.bun/bin:{home}/.icode/bin:{home}/.cargo/bin:\
+         {home}/bin:/opt/homebrew/bin:/usr/local/bin:{parent_path}",
+        home = home,
+        parent_path = parent_path
+    );
+    ensure_local_bin(&fallback, &home)
+}
+
+/// 确保 PATH 中包含 $HOME/.local/bin（claude 的安装位置）。
+fn ensure_local_bin(path: &str, home: &str) -> String {
+    let local_bin = format!("{home}/.local/bin", home = home);
+    if path.split(':').any(|p| p == local_bin) {
+        path.to_string()
+    } else {
+        format!("{local_bin}:{path}")
+    }
 }

@@ -1,4 +1,7 @@
-// 光球轨道 — 左侧面板，显示项目卡片列表 + 终端 orb。
+// 光球轨道 — 左侧面板，含「项目」/「文件」两个 Tab。
+//
+// 「项目」Tab 显示已保存的项目卡片列表 + 终端 orb。
+// 「文件」Tab 显示文件浏览器（FileExplorerController）。
 
 import * as ipc from './ipc-bridge.js';
 
@@ -10,7 +13,7 @@ const IDENTITY_COLORS = [
   { color: 'var(--id-amber)',   glow: 'var(--glow-amber)',    hex: '#F7C948' },
   { color: 'var(--id-sky)',     glow: 'var(--glow-sky)',      hex: '#7DD3FC' },
   { color: 'var(--id-peach)',   glow: 'var(--glow-peach)',    hex: '#FB923C' },
-  { color: 'var(--id-lime)',    glow: 'var(--glow-lime)',     hex: '#84CC16' },
+  { color: 'var(--id-lime)',    glow: 'var(--id-lime)',     hex: '#84CC16' },
   { color: 'var(--id-fuchsia)', glow: 'var(--glow-fuchsia)',  hex: '#D946EF' },
   { color: 'var(--id-teal)',    glow: 'var(--glow-teal)',     hex: '#2DD4BF' },
 ];
@@ -32,6 +35,8 @@ export class OrbitalController {
     this._activeTab = 'projects';
     this._projects = [];
     this._projectListView = null;
+    this._filesView = null;
+    this._fileExplorer = null;
     this._projectsLoaded = false;
   }
 
@@ -39,8 +44,8 @@ export class OrbitalController {
     this.tm = tm;
     this.el = document.getElementById('orbital');
 
-    // Render structure: project list + orbs (no header — titlebar has brand)
-    this._renderProjectContent();
+    this._renderTabBar();
+    this._renderTabContent();
 
     // Context menu
     this.el.addEventListener('contextmenu', (e) => {
@@ -51,13 +56,78 @@ export class OrbitalController {
     });
   }
 
-  // ── Render Methods ──
+  // ── Tab Bar ──
 
-  _renderProjectContent() {
+  _renderTabBar() {
+    const bar = document.createElement('div');
+    bar.className = 'orbital-tab-bar';
+
+    const tabProject = document.createElement('button');
+    tabProject.className = 'orbital-tab active';
+    tabProject.dataset.tab = 'projects';
+    tabProject.textContent = '项目';
+
+    const tabFiles = document.createElement('button');
+    tabFiles.className = 'orbital-tab';
+    tabFiles.dataset.tab = 'files';
+    tabFiles.textContent = '文件';
+
+    bar.appendChild(tabProject);
+    bar.appendChild(tabFiles);
+    this.el.appendChild(bar);
+
+    bar.addEventListener('click', (e) => {
+      const btn = e.target.closest('.orbital-tab');
+      if (!btn) return;
+      this._switchTab(btn.dataset.tab);
+    });
+  }
+
+  _switchTab(name) {
+    if (this._activeTab === name) return;
+    this._activeTab = name;
+
+    this.el.querySelectorAll('.orbital-tab').forEach((btn) => {
+      btn.classList.toggle('active', btn.dataset.tab === name);
+    });
+
+    this.el.querySelectorAll('.orbital-tab-content').forEach((panel) => {
+      panel.classList.toggle('hidden', panel.dataset.tab !== name);
+    });
+
+    if (name === 'files') {
+      if (this._fileExplorer) {
+        this._fileExplorer.setVisible(true);
+        this._fileExplorer.syncCwd(this.tm?.getActiveCwd());
+      }
+    } else {
+      if (this._fileExplorer) this._fileExplorer.setVisible(false);
+    }
+  }
+
+  /** Switch to Files tab (called by ⌘⇧F shortcut). */
+  switchToFiles() {
+    const sidebar = this.el;
+    if (sidebar.classList.contains('collapsed')) {
+      sidebar.classList.remove('collapsed');
+    }
+    this._switchTab('files');
+  }
+
+  /** Set the FileExplorerController instance. */
+  setFileExplorer(fe) {
+    this._fileExplorer = fe;
+    if (this._filesView) fe.init(this._filesView, this.tm);
+  }
+
+  // ── Tab Content ──
+
+  _renderTabContent() {
+    // ── Projects Tab ──
     const projectPanel = document.createElement('div');
-    projectPanel.className = 'orbital-content';
+    projectPanel.className = 'orbital-tab-content';
+    projectPanel.dataset.tab = 'projects';
 
-    // New project button
     const projectBtn = document.createElement('button');
     projectBtn.className = 'orbital-action-btn';
     projectBtn.innerHTML =
@@ -66,13 +136,24 @@ export class OrbitalController {
     projectBtn.addEventListener('click', () => this._newProject());
     projectPanel.appendChild(projectBtn);
 
-    // Project list container
     const projectList = document.createElement('div');
     projectList.className = 'project-list';
     projectPanel.appendChild(projectList);
 
     this.el.appendChild(projectPanel);
     this._projectListView = projectPanel;
+
+    // ── Files Tab ──
+    const filesPanel = document.createElement('div');
+    filesPanel.className = 'orbital-tab-content hidden';
+    filesPanel.dataset.tab = 'files';
+    this.el.appendChild(filesPanel);
+    this._filesView = filesPanel;
+
+    // Initialize file explorer if already set
+    if (this._fileExplorer) {
+      this._fileExplorer.init(filesPanel, this.tm);
+    }
 
     // Load projects on init
     this._loadProjects();
@@ -316,12 +397,6 @@ export class OrbitalController {
     nameInput.addEventListener('keydown', handleKey);
     dirInput.addEventListener('keydown', handleKey);
     descInput.addEventListener('keydown', handleKey);
-  }
-
-  // ── Agent Provider ──
-
-  setAgentProvider(fn) {
-    this.agentProvider = fn;
   }
 
   // ── Orb Management ──
@@ -685,17 +760,10 @@ function esc(s) {
   }[c]));
 }
 
-function formatRelativeTime(epochMs) {
-  if (!epochMs) return '';
-  const now = Date.now();
-  const diff = now - epochMs;
-  const minutes = Math.floor(diff / 60000);
-  if (minutes < 1) return 'now';
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h`;
-  const days = Math.floor(hours / 24);
-  if (days < 30) return `${days}d`;
-  const months = Math.floor(days / 30);
-  return `${months}mo`;
+function truncate(s, maxLen) {
+  if (!s) return '';
+  if (s.length <= maxLen) return s;
+  let end = maxLen;
+  while (end > 0 && !s.isCharBoundary(end)) end--;
+  return s.slice(0, end) + '…';
 }

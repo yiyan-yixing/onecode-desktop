@@ -12,11 +12,12 @@ function toBytes(chunk) {
 /**
  * 创建终端。onData 回调接收 PTY 输出字节（已规范化）。
  * 内部 new Channel()，onmessage → onData；Channel 对象作为 dataChannel 传入 pty_spawn。
+ * projectId: 可选，关联的项目 ID。
  */
-export async function ptySpawn({ cmd, args, cwd, env, label, onData }) {
+export async function ptySpawn({ cmd, args, cwd, env, label, projectId, onData }) {
   const channel = new Channel();
   channel.onmessage = (chunk) => onData(toBytes(chunk));
-  return invoke('pty_spawn', { cmd, args, cwd, env, label, dataChannel: channel });
+  return invoke('pty_spawn', { cmd, args, cwd, env, label, projectId, dataChannel: channel });
 }
 
 /** 手动重启：前端传入新的 onData 回调（旧 Channel 已失效）。 */
@@ -87,6 +88,13 @@ export async function ccStatusInvalidate() {
   return invoke('cc_status_invalidate');
 }
 
+// ── CC Sessions ──────────────────────────────────────────────────
+
+/** 列出 Claude Code 会话。project_dir 可选过滤（null = 所有项目）。 */
+export async function ccSessionsList(projectDir) {
+  return invoke('cc_sessions_list', { projectDir: projectDir || null });
+}
+
 // ── P1：健康检测 ────────────────────────────────────────────────────
 
 export async function healthCheck() {
@@ -96,6 +104,35 @@ export async function healthCheck() {
 /** 后台健康告警（Rust 每 5s emit，仅有告警项时推送）。 */
 export function onHealthReport(callback) {
   return listen('health:report', (event) => callback(event.payload));
+}
+
+// ── 配置管理 ──────────────────────────────────────────────────────────
+
+/** 保存应用配置到 ~/.onecode/desktop.json */
+export async function saveConfig(config) {
+  return invoke('save_config', { config });
+}
+
+/** 从 ~/.onecode/desktop.json 加载配置 */
+export async function loadConfig() {
+  return invoke('load_config');
+}
+
+// ── 项目管理 ──────────────────────────────────────────────────────────
+
+/** 保存项目元数据到 ~/.onecode/projects/<name>.json */
+export async function saveProject({ name, dir, description }) {
+  return invoke('save_project', { project: { name, dir, description } });
+}
+
+/** 列出所有已保存的项目 */
+export async function listProjects() {
+  return invoke('list_projects');
+}
+
+/** 删除项目元数据（不删除目录和关联终端） */
+export async function deleteProject(name) {
+  return invoke('delete_project', { name });
 }
 
 // ── 托盘 / 应用生命周期事件 ─────────────────────────────────────────
@@ -108,4 +145,42 @@ export function onTrayNewTerminal(callback) {
 /** 应用即将退出（托盘「退出」触发）——前端在此做最终会话保存。 */
 export function onAppBeforeQuit(callback) {
   return listen('app:before-quit', () => callback());
+}
+
+// ── 系统信息 ──────────────────────────────────────────────────────────
+
+/** 获取当前用户的 home 目录（跨平台，Rust 侧读取 HOME/USERPROFILE）。 */
+export async function getHomeDir() {
+  return invoke('get_home_dir');
+}
+
+// ── Setup Wizard ──────────────────────────────────────────────────
+
+/** 是否首次启动（wizard 未完成） */
+export async function isFirstRun() {
+  return invoke('is_first_run');
+}
+
+/** 检测环境依赖（Claude Code / Node.js / Git） */
+export async function checkEnvironment() {
+  return invoke('check_environment');
+}
+
+/** 保存 Wizard 配置（API Key / Base URL / Model + 标记 wizard_completed） */
+export async function saveWizardConfig({ apiKey, baseUrl, model }) {
+  return invoke('save_wizard_config', {
+    config: { api_key: apiKey, base_url: baseUrl, model }
+  });
+}
+
+// ── 文件浏览器 ──────────────────────────────────────────────
+
+/** 列出目录内容（返回 {path, entries[]}）。 */
+export async function fsListDir(path) {
+  return invoke('fs_list_dir', { path });
+}
+
+/** 读取文件内容用于预览（返回 {name, path, fileType, text, dataBase64, size}）。 */
+export async function fsReadFile(path) {
+  return invoke('fs_read_file', { path });
 }

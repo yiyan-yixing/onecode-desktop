@@ -4,6 +4,7 @@ pub const CREATE_TABLE_SQL: &str = r#"
 CREATE TABLE IF NOT EXISTS terminals (
     id          TEXT PRIMARY KEY,
     label       TEXT NOT NULL,
+    project_id  TEXT,
     cmd         TEXT NOT NULL,
     args        TEXT NOT NULL,   -- JSON array
     cwd         TEXT NOT NULL,

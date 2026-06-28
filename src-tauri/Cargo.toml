@@ -16,8 +16,9 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon"] }
+tauri = { version = "2", features = ["tray-icon", "devtools"] }
 tauri-plugin-shell = "2"
+tauri-plugin-dialog = "2"
 
 # PTY — WezTerm 维护的跨平台伪终端
 portable-pty = "0.8"
@@ -34,10 +35,14 @@ chrono = { version = "0.4", features = ["serde"] }
 # 异步运行时（Tauri v2 内置，显式声明所需 feature）
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros", "io-util", "fs"] }
 
+# Base64 编码（文件浏览器图片/PDF 预览）
+base64 = "0.22"
+
 # 错误处理 / 日志
 anyhow = "1"
 thiserror = "1"
 log = "0.4"
+env_logger = "0.11"
 
 [features]
 # Tauri 自定义协议（生产构建用）

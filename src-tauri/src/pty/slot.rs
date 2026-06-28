@@ -19,13 +19,16 @@ use portable_pty::{ChildKiller, MasterPty, PtySize};
 use uuid::Uuid;
 
 /// 10MB ring buffer per slot（对齐 pty.js MAX_BUFFER_SIZE）
+#[allow(dead_code)]
 pub const RING_BUFFER_MAX_BYTES: usize = 10 * 1024 * 1024;
 
 /// 终端状态
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SlotStatus {
     Running,
-    Exited { code: i32 },
+    Exited {
+        code: i32,
+    },
     Restarting,
     /// 连续重启超过上限，放弃
     Crashed,
@@ -131,6 +134,7 @@ impl RingBuffer {
 pub struct TerminalSlot {
     pub id: Uuid,
     pub label: Mutex<String>,
+    pub project_id: Mutex<Option<String>>,
     pub cmd: String,
     pub args: Vec<String>,
     pub cwd: String,
@@ -147,6 +151,8 @@ pub struct TerminalSlot {
 
     ring_buffer: Mutex<RingBuffer>,
     pty_master: Mutex<Option<Box<dyn MasterPty + Send>>>,
+    /// 缓存 PTY writer——take_writer() 只能调用一次，必须在 replace_handles 时预先取出。
+    pty_writer: Mutex<Option<Box<dyn Write + Send>>>,
     child_killer: Mutex<Option<Box<dyn ChildKiller + Send>>>,
 }
 
@@ -154,6 +160,7 @@ impl TerminalSlot {
     pub fn new(
         id: Uuid,
         label: String,
+        project_id: Option<String>,
         cmd: String,
         args: Vec<String>,
         cwd: String,
@@ -163,6 +170,7 @@ impl TerminalSlot {
         Self {
             id,
             label: Mutex::new(label),
+            project_id: Mutex::new(project_id),
             cmd,
             args,
             cwd,
@@ -176,18 +184,15 @@ impl TerminalSlot {
             closed: AtomicBool::new(false),
             ring_buffer: Mutex::new(RingBuffer::new(ring_buffer_max)),
             pty_master: Mutex::new(None),
+            pty_writer: Mutex::new(None),
             child_killer: Mutex::new(None),
         }
     }
 
     /// 写入用户输入到 PTY（读锁级别即可，不修改结构）。
     pub fn write(&self, data: &[u8]) -> std::io::Result<()> {
-        let master = self.pty_master.lock().expect("pty_master poisoned");
-        if let Some(m) = master.as_ref() {
-            // portable-pty 0.8：MasterPty 不实现 std::io::Write，须 take_writer() 取 writer。
-            let mut w = m
-                .take_writer()
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+        let mut writer = self.pty_writer.lock().expect("pty_writer poisoned");
+        if let Some(w) = writer.as_mut() {
             w.write_all(data)?;
             w.flush()?;
         }
@@ -204,7 +209,7 @@ impl TerminalSlot {
                 pixel_width: 0,
                 pixel_height: 0,
             })
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+            .map_err(|e| std::io::Error::other(e.to_string()))?;
         }
         Ok(())
     }
@@ -213,24 +218,32 @@ impl TerminalSlot {
     pub fn kill(&self) -> std::io::Result<()> {
         let mut killer = self.child_killer.lock().expect("child_killer poisoned");
         if let Some(k) = killer.as_mut() {
-            k.kill()
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+            k.kill().map_err(|e| std::io::Error::other(e.to_string()))?;
         }
         Ok(())
     }
 
     /// 取回放缓冲（Tab 切换时前端调用）。
     pub fn replay(&self) -> Vec<u8> {
-        self.ring_buffer.lock().expect("ring_buffer poisoned").replay()
+        self.ring_buffer
+            .lock()
+            .expect("ring_buffer poisoned")
+            .replay()
     }
 
     pub fn clear_buffer(&self) {
-        self.ring_buffer.lock().expect("ring_buffer poisoned").clear();
+        self.ring_buffer
+            .lock()
+            .expect("ring_buffer poisoned")
+            .clear();
     }
 
     /// 写入 PTY 输出到 ring buffer（batcher 任务调用）。
     pub fn push_output(&self, data: Vec<u8>) {
-        self.ring_buffer.lock().expect("ring_buffer poisoned").push(data);
+        self.ring_buffer
+            .lock()
+            .expect("ring_buffer poisoned")
+            .push(data);
     }
 
     pub fn rename(&self, label: String) {
@@ -275,7 +288,16 @@ impl TerminalSlot {
         killer: Box<dyn ChildKiller + Send>,
         pid: Option<u32>,
     ) {
+        // take_writer() 只能调用一次，在此预先取出并缓存
+        let writer = master
+            .take_writer()
+            .map_err(|e| {
+                log::error!("[pty] take_writer failed: {e}");
+                e
+            })
+            .ok();
         *self.pty_master.lock().expect("pty_master poisoned") = Some(master);
+        *self.pty_writer.lock().expect("pty_writer poisoned") = writer;
         *self.child_killer.lock().expect("child_killer poisoned") = Some(killer);
         *self.pid.lock().expect("pid poisoned") = pid;
         *self.spawned_at.lock().expect("spawned_at poisoned") = Some(Instant::now());

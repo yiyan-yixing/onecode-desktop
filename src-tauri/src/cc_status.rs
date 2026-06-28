@@ -192,10 +192,18 @@ fn skill_from_content(fallback_name: &str, content: &str, scope: &str) -> SkillI
         // fm_field 返回 String（空串=未找到），非 Option：空则回退到 fallback_name。
         let name = {
             let n = fm_field(&fm, "name");
-            if n.is_empty() { fallback_name.to_string() } else { n }
+            if n.is_empty() {
+                fallback_name.to_string()
+            } else {
+                n
+            }
         };
         let description = fm_field(&fm, "description");
-        SkillInfo { name, description, scope: scope.to_string() }
+        SkillInfo {
+            name,
+            description,
+            scope: scope.to_string(),
+        }
     } else {
         let first_heading = content
             .lines()
@@ -212,12 +220,16 @@ fn skill_from_content(fallback_name: &str, content: &str, scope: &str) -> SkillI
 
 fn load_hooks(dir: &Path, scope: &str, out: &mut HashMap<String, Vec<HookInfo>>) {
     for f in ["settings.json", "settings.local.json"] {
-        let Some(s) = read_json(&dir.join(f)) else { continue };
+        let Some(s) = read_json(&dir.join(f)) else {
+            continue;
+        };
         let Some(hooks) = s.get("hooks").and_then(|v| v.as_object()) else {
             continue;
         };
         for (event, hook_list) in hooks {
-            let Some(arr) = hook_list.as_array() else { continue };
+            let Some(arr) = hook_list.as_array() else {
+                continue;
+            };
             let bucket = out.entry(event.clone()).or_default();
             for h in arr {
                 let Some(subs) = h.get("hooks").and_then(|v| v.as_array()) else {
@@ -225,9 +237,21 @@ fn load_hooks(dir: &Path, scope: &str, out: &mut HashMap<String, Vec<HookInfo>>)
                 };
                 for sub in subs {
                     bucket.push(HookInfo {
-                        kind: sub.get("type").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                        command: sub.get("command").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                        message: sub.get("message").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                        kind: sub
+                            .get("type")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                        command: sub
+                            .get("command")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                        message: sub
+                            .get("message")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
                         scope: scope.to_string(),
                     });
                 }
@@ -238,15 +262,25 @@ fn load_hooks(dir: &Path, scope: &str, out: &mut HashMap<String, Vec<HookInfo>>)
 
 fn load_plugins(dir: &Path, scope: &str, out: &mut Vec<PluginInfo>) {
     for f in ["settings.json", "settings.local.json"] {
-        let Some(s) = read_json(&dir.join(f)) else { continue };
+        let Some(s) = read_json(&dir.join(f)) else {
+            continue;
+        };
         let Some(servers) = s.get("mcpServers").and_then(|v| v.as_object()) else {
             continue;
         };
         for (name, cfg) in servers {
             out.push(PluginInfo {
                 name: name.clone(),
-                kind: cfg.get("type").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                command: cfg.get("command").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                kind: cfg
+                    .get("type")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                command: cfg
+                    .get("command")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
                 args: cfg
                     .get("args")
                     .and_then(|v| v.as_array())
@@ -264,20 +298,37 @@ fn load_plugins(dir: &Path, scope: &str, out: &mut Vec<PluginInfo>) {
 
 fn load_tasks(dir: &Path, scope: &str, out: &mut Vec<TaskInfo>) {
     for f in ["scheduled_tasks.json", "cron-session.json"] {
-        let Some(raw) = read_json(&dir.join(f)) else { continue };
+        let Some(raw) = read_json(&dir.join(f)) else {
+            continue;
+        };
         let tasks = match (&raw, raw.get("tasks")) {
             (Value::Array(_), _) => raw.as_array().cloned().unwrap_or_default(),
             (_, Some(t)) if t.is_array() => t.as_array().cloned().unwrap_or_default(),
             _ => continue,
         };
         for t in tasks {
-            let name = t.get("name").and_then(|v| v.as_str()).map(String::from).unwrap_or_else(|| {
-                t.get("prompt").and_then(|v| v.as_str()).map(|s| s.chars().take(60).collect()).unwrap_or_default()
-            });
-            let cron = t.get("cron").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let name = t
+                .get("name")
+                .and_then(|v| v.as_str())
+                .map(String::from)
+                .unwrap_or_else(|| {
+                    t.get("prompt")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.chars().take(60).collect())
+                        .unwrap_or_default()
+                });
+            let cron = t
+                .get("cron")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             out.push(TaskInfo {
                 name,
-                prompt: t.get("prompt").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                prompt: t
+                    .get("prompt")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
                 next_run: cron_next(&cron),
                 cron,
                 recurring: t.get("recurring").and_then(|v| v.as_bool()),
@@ -299,8 +350,12 @@ fn load_agents(dir: &Path, scope: &str, out: &mut Vec<AgentInfo>) {
         if name.starts_with('.') || !name.ends_with(".md") {
             continue;
         }
-        let Some(content) = read_text(&entry.path()) else { continue };
-        let Some(fm) = frontmatter_body(&content) else { continue };
+        let Some(content) = read_text(&entry.path()) else {
+            continue;
+        };
+        let Some(fm) = frontmatter_body(&content) else {
+            continue;
+        };
         let agent_name = fm_field(&fm, "name");
         if agent_name.is_empty() {
             continue;
@@ -392,7 +447,9 @@ fn cron_next(expr: &str) -> String {
 
     // 提前剪枝：最小月份无法容纳最小日
     let max_day_by_month = [0u32, 31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-    let possible = mons_vec.iter().any(|&m| max_day_by_month[m as usize] >= dom_min);
+    let possible = mons_vec
+        .iter()
+        .any(|&m| max_day_by_month[m as usize] >= dom_min);
     if !possible {
         return String::new();
     }
@@ -408,9 +465,7 @@ fn cron_next(expr: &str) -> String {
         }
         let day_ok = if dom_is_star && dow_is_star {
             doms.contains(&d) || dows.contains(&dow)
-        } else if dom_is_star {
-            dows.contains(&dow) && doms.contains(&d)
-        } else if dow_is_star {
+        } else if dom_is_star || dow_is_star {
             doms.contains(&d) && dows.contains(&dow)
         } else {
             doms.contains(&d) || dows.contains(&dow)

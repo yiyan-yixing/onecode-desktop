@@ -20,11 +20,14 @@ import { OrbitalController } from './orbital.js';
 import { PaletteController } from './palette.js';
 import { RippleController } from './ripple.js';
 import { CcStatusView } from './cc-status.js';
+import { FileExplorerController } from './file-explorer.js';
+import { initWizard, destroyWizard } from './wizard.js';
 import * as ipc from './ipc-bridge.js';
 const tabManager = new TabManager();
 const orbital = new OrbitalController();
 const palette = new PaletteController();
 const ripple = new RippleController();
+const fileExplorer = new FileExplorerController();
 let ccView = null;
 
 async function init() {
@@ -33,11 +36,16 @@ async function init() {
   tabManager.orbital = orbital;
   tabManager.ripple = ripple;
   orbital.init(tabManager);
+  orbital.setFileExplorer(fileExplorer);
   palette.init(tabManager);
   ripple.init();
   tabManager.onChange = (tm) => {
     updateStatusbar(tm);
     orbital._loadProjects(); // refresh project list (hides cards with no terminals)
+    // 同步文件浏览器 cwd
+    if (orbital._activeTab === 'files' && fileExplorer) {
+      fileExplorer.syncCwd(tm.getActiveCwd());
+    }
   };
 
   initKeybindings(tabManager);
@@ -49,7 +57,6 @@ async function init() {
   });
   ccView.onAgents = (agents) => {
     tabManager.agentProvider = () => agents;
-    orbital.setAgentProvider(() => agents);
     palette.setAgentProvider(() => agents);
   };
   ccView.onStatus = (data) => {
@@ -57,6 +64,13 @@ async function init() {
     updateStatusbarBadges(data);
   };
   ccView.start();
+
+  // Wizard gate — 首次启动引导（controller 初始化后、session restore 前）
+  try {
+    await initWizard();   // blocks until wizard completes (skips if not first run)
+  } catch (e) {
+    console.warn('[wizard] failed, proceeding to main interface:', e);
+  }
 
   // Empty orb click → create first terminal
   document.getElementById('emptyOrb')?.addEventListener('click', () => {
@@ -159,6 +173,12 @@ function initKeybindings(tm) {
       e.preventDefault();
       const sidebar = document.getElementById('orbital');
       if (sidebar) sidebar.classList.toggle('collapsed');
+      return;
+    }
+    // Cmd+Shift+F → switch to Files tab
+    if (e[mod] && e.shiftKey && e.key.toLowerCase() === 'f') {
+      e.preventDefault();
+      orbital.switchToFiles();
       return;
     }
     if (!e[mod]) return;

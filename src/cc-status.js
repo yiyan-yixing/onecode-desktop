@@ -24,6 +24,8 @@ export class CcStatusView {
     this.getProjectDir = getProjectDir; // () => string|null 活跃终端 cwd
     this.agents = [];
     this.onAgents = null; // agents 列表变更回调（@mention 用）
+    this.onStatus = null; // status 数据变更回调（sidebar 用）
+    this._lastData = null; // 缓存最新数据供 sidebar 使用
     this._timer = null;
   }
 
@@ -46,7 +48,9 @@ export class CcStatusView {
       this.agents = agents;
       if (typeof this.onAgents === 'function') this.onAgents(agents);
     }
+    this._lastData = data;
     this._render(data);
+    if (typeof this.onStatus === 'function') this.onStatus(data);
   }
 
   _render(data) {
@@ -60,12 +64,30 @@ export class CcStatusView {
       plugins: (data.plugins || []).length,
       tasks: (data.tasks || []).length,
     };
-    this.badgeRoot.innerHTML = ['skills', 'hooks', 'plugins', 'tasks']
-      .map(
-        (t) =>
-          `<span class="cc-badge ${counts[t] > 0 ? 'has' : ''}" data-cc="${t}" ` +
-          `title="${t}: ${counts[t]}">${ICONS[t]}<span class="n">${counts[t]}</span></span>`,
-      )
-      .join('');
+    // 增量更新：只在数值变化时才更新 DOM
+    const keys = ['skills', 'hooks', 'plugins', 'tasks'];
+    for (const t of keys) {
+      const pill = this.badgeRoot.querySelector(`[data-cc="${t}"]`);
+      const n = counts[t];
+      if (pill) {
+        const numEl = pill.querySelector('.n');
+        if (numEl && numEl.textContent !== String(n)) {
+          numEl.textContent = n;
+        }
+        const hasClass = pill.classList.contains('has');
+        if (n > 0 && !hasClass) pill.classList.add('has');
+        if (n === 0 && hasClass) pill.classList.remove('has');
+      }
+    }
+    // 首次渲染时创建 DOM — statusbar badge style
+    if (!this.badgeRoot.querySelector('[data-cc]')) {
+      this.badgeRoot.innerHTML = keys
+        .map(
+          (t) =>
+            `<span class="ribbon-badge ${counts[t] > 0 ? 'has' : ''}" data-cc="${t}" ` +
+            `title="${t}: ${counts[t]}">${ICONS[t]}<span class="n">${counts[t]}</span></span>`,
+        )
+        .join('');
+    }
   }
 }

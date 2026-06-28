@@ -81,9 +81,9 @@ fn report_of(s: &SlotSummary) -> HealthReport {
     };
 
     HealthReport {
-        id: s.id,
+        id: s.id.clone(),
         pid: Some(pid),
-        status: s.status,
+        status: s.status.clone(),
         alive,
         is_zombie,
         rss_bytes,

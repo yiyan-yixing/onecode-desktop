@@ -5,7 +5,11 @@ export class ScrollThumb {
   constructor(term, termEl) {
     this.term = term;
     this.termEl = termEl;
-    termEl.style.position = 'relative';
+    // 注意：不要设置 position: relative！
+    // .term-instance CSS 已设 position:absolute; inset:0，它本身就是 containing block，
+    // 覆盖为 relative 会导致元素高度从「填满父容器」变成 auto（内容高度），
+    // 这正是输入框逐渐下滑消失的根因——fit() 基于错误的容器高度反复计算。
+    // position:absolute + contain:layout paint 已足以让 track 定位正确。
 
     this.track = document.createElement('div');
     this.track.className = 'xterm-scroll-track';
@@ -33,11 +37,49 @@ export class ScrollThumb {
     this.hideTimer = null;
     this.dragging = false;
 
-    term.onResize(() => setTimeout(() => this.update(), 200));
-    term.onScroll(() => this.update());
+    // Store bound listeners for cleanup in dispose()
+    this._onTrackMouseDown = (e) => this._onTrackClick(e);
+    this._onThumbMouseDown = (e) => this._onThumbDrag(e);
+    this.track.addEventListener('mousedown', this._onTrackMouseDown);
+    this.thumb.addEventListener('mousedown', this._onThumbMouseDown);
 
-    this.track.addEventListener('mousedown', (e) => this._onTrackClick(e));
-    this.thumb.addEventListener('mousedown', (e) => this._onThumbDrag(e));
+    // xterm event listeners (onResize/onScroll return disposable handles)
+    this._resizeDisposable = term.onResize(() => setTimeout(() => this.update(), 200));
+    this._scrollDisposable = term.onScroll(() => {
+      // 节流：避免高频 scroll 事件导致 DOM 回流 → ResizeObserver 循环
+      if (!this._scrollRaf) {
+        this._scrollRaf = requestAnimationFrame(() => {
+          this._scrollRaf = null;
+          this.update();
+        });
+      }
+    });
+  }
+
+  /** 释放所有事件监听器和 DOM 元素，防止内存泄漏。 */
+  dispose() {
+    // Clear pending timers
+    clearTimeout(this.hideTimer);
+    if (this._scrollRaf) {
+      cancelAnimationFrame(this._scrollRaf);
+      this._scrollRaf = null;
+    }
+    // Dispose xterm listener handles
+    if (this._resizeDisposable) { try { this._resizeDisposable.dispose(); } catch (_) {} }
+    if (this._scrollDisposable) { try { this._scrollDisposable.dispose(); } catch (_) {} }
+    // Remove DOM event listeners
+    if (this._onTrackMouseDown) this.track.removeEventListener('mousedown', this._onTrackMouseDown);
+    if (this._onThumbMouseDown) this.thumb.removeEventListener('mousedown', this._onThumbMouseDown);
+    // Clean up active drag listeners (in case dispose happens mid-drag)
+    if (this._dragOnMove) {
+      document.removeEventListener('mousemove', this._dragOnMove);
+      document.removeEventListener('mouseup', this._dragOnUp);
+      document.body.style.userSelect = '';
+      this._dragOnMove = null;
+      this._dragOnUp = null;
+    }
+    // Remove DOM elements
+    this.track.remove();
   }
 
   update() {
@@ -102,7 +144,8 @@ export class ScrollThumb {
     const viewH = this.term.rows;
     const trackH = this.termEl.clientHeight;
 
-    const onMove = (ev) => {
+    // Store as instance fields so dispose() can clean up during active drag
+    this._dragOnMove = (ev) => {
       const dy = ev.clientY - startY;
       const linesPerPx = total / trackH;
       let target = Math.round(startViewY + dy * linesPerPx);
@@ -112,17 +155,19 @@ export class ScrollThumb {
       } catch (_) {}
       this.update();
     };
-    const onUp = () => {
+    this._dragOnUp = () => {
       this.dragging = false;
       this.thumb.style.background = '';
       this.thumb.style.boxShadow = '';
       this.thumb.style.width = '';
       this.thumb.style.right = '';
       document.body.style.userSelect = '';
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onUp);
+      document.removeEventListener('mousemove', this._dragOnMove);
+      document.removeEventListener('mouseup', this._dragOnUp);
+      this._dragOnMove = null;
+      this._dragOnUp = null;
     };
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onUp);
+    document.addEventListener('mousemove', this._dragOnMove);
+    document.addEventListener('mouseup', this._dragOnUp);
   }
 }

@@ -8,6 +8,7 @@ OneCode Desktop 是 [OneCode](https://github.com/yiyan-yixing/onecode) 的桌面
 
 - 🖥️ **多终端管理** — 一个窗口内创建、切换、关闭多个 Claude Code 终端
 - 📁 **项目面板** — 左侧项目卡片，一键切换或创建终端
+- 🔍 **探索面板** — 查看所有 Agent 和会话，点击 Agent 插入 `@id`，点击会话切换终端
 - 🔴 **实时状态** — 终端运行/退出/崩溃状态一目了然
 - 🏷️ **Agent @mention** — 输入 `@` 弹出 Agent 列表，快速调用 @dev、@architect 等
 - 💾 **会话持久化** — 终端配置自动保存，重启恢复
@@ -42,7 +43,7 @@ OneCode Desktop 是 [OneCode](https://github.com/yiyan-yixing/onecode) 的桌面
 │     CcSessionsCache ──► 读 ~/.claude 的会话转录           │
 │                                                          │
 │   Frontend (WebView)                                     │
-│     OrbitalController (项目面板) · CcStatusView (徽章)    │
+│     OrbitalController (项目/探索面板) · CcStatusView (徽章)    │
 │     MentionController (@弹窗) · PaletteController (⌘K)   │
 └──────────────────────────────────────────────────────────┘
 ```
@@ -86,7 +87,7 @@ onecode-desktop/
 │   ├── styles.css        Cowork 暖色主题
 │   ├── ipc-bridge.js     Tauri invoke + Channel 封装
 │   ├── cc-status.js      状态栏徽章 + agent 数据源
-│   ├── orbital.js        左侧项目面板（项目卡片 + 终端 orb）
+│   ├── orbital.js        左侧面板（项目/探索双 Tab + 终端 orb）
 │   ├── palette.js        命令面板（⌘K）
 │   ├── ripple.js         通知涟漪动画
 │   └── terminal/         TabManager / xterm / @mention / 滚动条 / IME
@@ -147,6 +148,7 @@ make check            # clippy + fmt + test
 | 快捷键 | 功能 |
 |---|---|
 | `Cmd/Ctrl + B` | 折叠/展开侧边栏 |
+| `Cmd/Ctrl + E` | 打开探索面板（Agent + Session 列表） |
 | `Cmd/Ctrl + T` | 新建终端 |
 | `Cmd/Ctrl + Shift + T` | 在当前项目目录新建终端 |
 | `Cmd/Ctrl + W` | 关闭当前终端 |

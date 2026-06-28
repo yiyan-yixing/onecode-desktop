@@ -19,6 +19,7 @@ use tokio::sync::Mutex;
 pub struct PersistentSlot {
     pub id: String,
     pub label: String,
+    pub project_id: Option<String>,
     pub cmd: String,
     pub args: Vec<String>,
     pub cwd: String,
@@ -36,6 +37,19 @@ impl SessionStore {
         let path = data_dir.join("sessions.db");
         let conn = rusqlite::Connection::open(path)?;
         conn.execute_batch(schema::CREATE_TABLE_SQL)?;
+        // Migration: add project_id column if missing (upgrade from v0)
+        let has_project_id: bool = {
+            let mut stmt = conn.prepare("PRAGMA table_info(terminals)")?;
+            let rows: Vec<String> = stmt
+                .query_map([], |row| row.get::<_, String>(1))?
+                .filter_map(|r| r.ok())
+                .collect();
+            rows.iter().any(|c| c == "project_id")
+        };
+        if !has_project_id {
+            conn.execute_batch("ALTER TABLE terminals ADD COLUMN project_id TEXT")?;
+            log::info!("[session] migrated: added project_id column");
+        }
         Ok(Self {
             db: Arc::new(Mutex::new(conn)),
         })
@@ -46,11 +60,12 @@ impl SessionStore {
         db.execute("DELETE FROM terminals", [])?;
         for s in slots {
             db.execute(
-                "INSERT INTO terminals (id, label, cmd, args, cwd, env, created_at) \
-                 VALUES (?1,?2,?3,?4,?5,?6,?7)",
+                "INSERT INTO terminals (id, label, project_id, cmd, args, cwd, env, created_at) \
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
                 rusqlite::params![
                     s.id,
                     s.label,
+                    s.project_id,
                     s.cmd,
                     serde_json::to_string(&s.args)?,
                     s.cwd,
@@ -65,20 +80,21 @@ impl SessionStore {
     pub async fn load_all(&self) -> Result<Vec<PersistentSlot>> {
         let db = self.db.lock().await;
         let mut stmt = db.prepare(
-            "SELECT id, label, cmd, args, cwd, env, created_at \
+            "SELECT id, label, project_id, cmd, args, cwd, env, created_at \
              FROM terminals ORDER BY created_at",
         )?;
         let rows = stmt.query_map([], |row| {
-            let args_json: String = row.get(3)?;
-            let env_json: String = row.get(5)?;
+            let args_json: String = row.get(4)?;
+            let env_json: String = row.get(6)?;
             Ok(PersistentSlot {
                 id: row.get(0)?,
                 label: row.get(1)?,
-                cmd: row.get(2)?,
+                project_id: row.get(2)?,
+                cmd: row.get(3)?,
                 args: serde_json::from_str(&args_json).unwrap_or_default(),
-                cwd: row.get(4)?,
+                cwd: row.get(5)?,
                 env: serde_json::from_str(&env_json).unwrap_or_default(),
-                created_at: row.get(6)?,
+                created_at: row.get(7)?,
             })
         })?;
         let mut out = Vec::new();

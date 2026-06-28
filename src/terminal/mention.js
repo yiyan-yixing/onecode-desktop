@@ -24,9 +24,19 @@ export class MentionController {
     this.prefix = '';
     this.idx = -1;
 
-    term.onData((d) => this._onInput(d));
-    termEl.addEventListener('keydown', (e) => this._onKeyDown(e), true); // capture
-    termEl.addEventListener('focusout', () => this.hide());
+    // Store listener references for cleanup in dispose()
+    this._onDataDisposable = term.onData((d) => this._onInput(d));
+    this._boundKeyDown = (e) => this._onKeyDown(e);
+    this._onFocusOut = () => this.hide();
+    termEl.addEventListener('keydown', this._boundKeyDown, true); // capture
+    termEl.addEventListener('focusout', this._onFocusOut);
+  }
+
+  /** 释放所有事件监听器，防止内存泄漏。 */
+  dispose() {
+    if (this._onDataDisposable) { try { this._onDataDisposable.dispose(); } catch (_) {} }
+    if (this._boundKeyDown) this.termEl.removeEventListener('keydown', this._boundKeyDown, true);
+    if (this._onFocusOut) this.termEl.removeEventListener('focusout', this._onFocusOut);
   }
 
   /** 用户输入流。逐字符识别 @ 触发 / 累积前缀 / 非词字符收尾。 */
