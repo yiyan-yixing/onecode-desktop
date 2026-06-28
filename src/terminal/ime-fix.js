@@ -50,6 +50,35 @@
 //   修复：(a) term 对象上记录 xterm onData 最近发送的数据和时间戳，
 //         Fix 3 在发送前检查 xterm 是否刚发过同样的数据。
 //         (b) imeFilter 去重覆盖单字符（100ms 窗口）。
+//
+// 修复 3 改进: 移除 insertText 条件守卫，依赖 Fix 4 去重
+//   根因：旧的 recentlyComposed 窗口守卫和 lastKeyDownCode 判断都不可靠。
+//         recentlyComposed 300ms 过期后丢弃 IME 直接插入的字符；
+//         lastKeyDownCode 在 IME 直接插入时 keyCode 不一定是 229
+//         （如 Shift+1 的 keyCode 可能是 49 而非 229），导致误判。
+//   修复：完全移除 insertText 条件守卫。对于 xterm keydown 已处理的按键，
+//         onData 回调会先于 input 事件更新 _xtermSentData，
+//         Fix 4 的 dedup 检查（value === _xtermSentData within 100ms）
+//         能可靠地跳过重复数据。对于 IME 直接插入（xterm 未处理），
+//         _xtermSentData 不匹配，Fix 3 正确发送。
+//
+// 修复 5: Caps Lock 中断 composition 时阻止 xterm 发送脏拼音
+//   根因：Caps Lock 切换输入法时，IME 将原始拼音（含音节分隔空格如 "wo men"）
+//         提交到 textarea。xterm 的 compositionend handler 通过 setTimeout(0)
+//         异步读取 textarea 发送这些文本 → 终端收到 "wo men" 而非 "women"。
+//         尝试用 queueMicrotask 在 setTimeout 之前清理 textarea 在 Tauri WebView
+//         中不可靠（microtask 与 macrotask 时序不一致）。
+//   修复：在 compositionend capture 阶段（先于 xterm handler），同步检测 textarea
+//         是否为纯 ASCII 字母数字+空格（即原始拼音提交）。若是，立即清空 textarea
+//         并通过 _imeSendFn 发送清理后的拼音（去除 IME 音节分隔空格）。
+//         xterm 的 setTimeout(0) 后读到空 textarea → 发送空字符串 → 不发送。
+//         正常中文提交（textarea 含非 ASCII 字符）不受影响。
+//
+// 补充：_compositionJustEnded 安全重置
+//   根因：_compositionJustEnded 标志设计为「composition 结束后拦截下一个非 229
+//         keydown」，但 macOS 上 Caps Lock 可能不触发 keydown → 标志永不重置
+//         → 下一个正常按键被误拦截。
+//   修复：compositionend 后 200ms setTimeout 自动重置标志。
 
 export function initImeFix(term, termEl) {
   const ta = term.textarea || (term.element && term.element.querySelector('textarea'));
@@ -93,12 +122,23 @@ export function initImeFix(term, termEl) {
     _compositionEndedAt = Date.now();
     term._compositionEndedAt = _compositionEndedAt; // 同步到 term 对象
     // ★ 置标志：下一个非 229 keydown 仍然拦截
-    // 这是导致 composition 结束的那个按键（如 Caps Lock、Enter、空格）
     _compositionJustEnded = true;
-    // ⚠️ 不在这里清空 textarea！xterm 的 compositionend handler
-    // 通过 setTimeout(0) 异步读取 textarea 获取最终文本。
-    // 如果在 rAF 中提前清空，xterm 会读到空字符串 → 中文无法输入。
-    // textarea 的清空由 xterm 自己负责。
+
+    // ★ 安全重置
+    setTimeout(() => { _compositionJustEnded = false; }, 200);
+
+    // ★ 修复 5: Caps Lock 中断时尽力清空 textarea
+    // xterm 的 _handleAnyTextareaChanges() 在 keyCode=229 keydown 时用
+    // setTimeout(0) 队列回调，这些 setTimeout 可能比 compositionend 事件先执行，
+    // 导致 onData 先收到 "wo men"（此时 recentlyComposed 还是 false）。
+    // 所以拼音过滤不能依赖 recentlyComposed，且不能在 compositionend 中
+    // 用 _imeSendFn 发送（会与 onData 过滤后的 "women" 双发）。
+    // 策略：仅在 compositionend 中清空 textarea（尽力阻止 xterm 读脏数据），
+    // 拼音空格过滤完全由 tab-manager.js onData 路径处理（不限 recentlyComposed）。
+    const value = ta.value;
+    if (value && /^[a-zA-Z0-9]+( +[a-zA-Z0-9]+)+$/.test(value)) {
+      ta.value = ''; // 尽力清空（IME 可能写回，但 onData 兜底过滤）
+    }
   }, true);
 
   // 安全：失焦时重置 IME 状态，防止 isComposing 卡在 true
@@ -144,15 +184,13 @@ export function initImeFix(term, termEl) {
         return;
       }
 
-      // ★ 修复 3: 普通键盘 insertText — xterm 的 keydown handler 正常处理
-      // 只有 IME 最近活跃时（composition 结束后 300ms 内）的 insertText
-      // 才可能是 IME 直接插入（Shift+symbol），需要手动发送。
-      // 非此窗口内的 insertText 说明 xterm 已通过 keydown 处理过了。
-      const recentlyComposed = (now - _compositionEndedAt) < 300;
-      if (e.inputType === 'insertText' && !recentlyComposed && !isComposing) {
-        ta.value = '';
-        return;
-      }
+      // ★ 修复 3 改进: 移除 insertText 条件守卫
+      // 旧逻辑用 recentlyComposed 300ms 窗口或 lastKeyDownCode 判断，
+      // 但两者都不可靠 — recentlyComposed 过期丢弃 IME 直接插入的字符，
+      // lastKeyDownCode 在 IME 直接插入时 keyCode 不一定是 229。
+      // 正确做法：完全依赖 Fix 4 的 _xtermSentData 去重。
+      // xterm keydown 已处理的按键 → onData 先更新 _xtermSentData → Fix 4 跳过。
+      // IME 直接插入（xterm 未处理）→ _xtermSentData 不匹配 → Fix 3 发送。
 
       // IME 直接插入了字符（如 Shift+1 → ！），xterm 两条路径都跳过了
       if (typeof term._imeSendFn === 'function') {

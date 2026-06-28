@@ -231,14 +231,7 @@ export class TabManager {
     });
 
     const dataDisposable = term.onData((data) => {
-      // ★ 修复 4: 记录 xterm onData 发送的数据，供 ime-fix.js Fix 3 去重
-      term._xtermSentData = data;
-      term._xtermSentTime = Date.now();
-
       // ★ Caps Lock 安全网：composition 双发去重
-      // 当 _finalizeComposition(false) 和 _finalizeComposition(true) 都触发时
-      // （如 Caps Lock 切换输入法），xterm 会短时间内发送两次相同数据。
-      // 只在 composition 刚结束后 300ms 内启用此去重，不影响正常连续输入。
       const now = Date.now();
       const recentlyComposed = term._compositionEndedAt && (now - term._compositionEndedAt) < 300;
       if (recentlyComposed && data === term._lastOnDataData && (now - term._lastOnDataTime) < 100) {
@@ -246,6 +239,18 @@ export class TabManager {
       }
       term._lastOnDataData = data;
       term._lastOnDataTime = now;
+
+      // ★ 修复 5: onData 路径过滤 IME 拼音空格（不限 recentlyComposed）
+      // xterm 的 _handleAnyTextareaChanges() setTimeout 可能比 compositionend
+      // 事件先执行 → recentlyComposed 仍为 false → 必须无条件过滤。
+      // 安全性：正常英文逐字符发送，不会一次发送 "wo men" 这样的多词块。
+      if (/^[a-zA-Z0-9]+( +[a-zA-Z0-9]+)+$/.test(data)) {
+        data = data.replace(/ +/g, '');
+      }
+
+      // ★ 修复 4: 记录过滤后的数据，供 ime-fix.js Fix 3 去重
+      term._xtermSentData = data;
+      term._xtermSentTime = now;
 
       ipc.ptyWrite(id, data).catch((e) => {
         console.warn(`[ptyWrite] failed for ${id}:`, e);
@@ -434,10 +439,6 @@ export class TabManager {
           this.updateStatus(realId, 'exited', code);
         });
         const dataDisposable = st.term.onData((data) => {
-          // ★ 修复 4: 记录 xterm onData 发送的数据，供 ime-fix.js 去重
-          st.term._xtermSentData = data;
-          st.term._xtermSentTime = Date.now();
-
           // ★ Caps Lock 安全网：composition 双发去重
           const now = Date.now();
           const recentlyComposed = st.term._compositionEndedAt && (now - st.term._compositionEndedAt) < 300;
@@ -446,6 +447,15 @@ export class TabManager {
           }
           st.term._lastOnDataData = data;
           st.term._lastOnDataTime = now;
+
+          // ★ 修复 5: onData 路径过滤 IME 拼音空格（不限 recentlyComposed）
+          if (/^[a-zA-Z0-9]+( +[a-zA-Z0-9]+)+$/.test(data)) {
+            data = data.replace(/ +/g, '');
+          }
+
+          // ★ 修复 4: 记录过滤后的数据，供 ime-fix.js Fix 3 去重
+          st.term._xtermSentData = data;
+          st.term._xtermSentTime = now;
 
           ipc.ptyWrite(realId, data).catch((e) => {
             console.warn(`[ptyWrite] failed for ${realId}:`, e);

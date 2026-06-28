@@ -125,7 +125,7 @@ function createImeEnv() {
   }
 
   // Helper: simulate xterm onData (mimics tab-manager.js behavior)
-  // Includes composition double-send dedup (Caps Lock safety net)
+  // Includes composition double-send dedup + pinyin space filter (Fix 5)
   function simulateXtermOnData(data) {
     term._xtermSentData = data;
     term._xtermSentTime = Date.now();
@@ -137,6 +137,11 @@ function createImeEnv() {
     }
     term._lastOnDataData = data;
     term._lastOnDataTime = now;
+
+    // ★ Fix 5: onData 路径过滤拼音空格（不限 recentlyComposed）
+    if (/^[a-zA-Z0-9]+( +[a-zA-Z0-9]+)+$/.test(data)) {
+      data = data.replace(/ +/g, '');
+    }
 
     sentViaOnData.push(data);
   }
@@ -245,7 +250,7 @@ describe('Scenario B: Direct space press', () => {
     }
   });
 
-  test('IME-B2: Space after composition 300ms+ — insertText path skips', () => {
+  test('IME-B2: Space after composition — Fix 4 dedup handles insertText', () => {
     const env = createImeEnv();
     try {
       // Full composition flow
@@ -254,14 +259,7 @@ describe('Scenario B: Direct space press', () => {
       env.dispatchTaEvent('keydown', { keyCode: 32, isComposing: true, stopImmediatePropagation: () => {} });
       env.dispatchTaEvent('compositionend', {});
 
-      // Simulate > 300ms by waiting
-      // We cannot easily mock Date.now() in the closure, so we use a real wait
-      // However, 300ms is too long for a test. Instead, we set up a scenario
-      // where recentlyComposed is false by waiting just enough.
-      // Since _compositionEndedAt is captured in the closure, we can't modify it.
-      // We'll wait 310ms for the test to be realistic.
-      // For speed, we verify the logic differently: after composition, space goes via onData.
-
+      // After composition, user presses space — xterm handles via onData
       env.dispatchTaEvent('keydown', { keyCode: 32, isComposing: false, stopImmediatePropagation: () => {} });
       env.simulateXtermOnData(' ');
 
@@ -269,8 +267,7 @@ describe('Scenario B: Direct space press', () => {
       env.dispatchElEvent('input', { inputType: 'insertText', isComposing: false });
 
       // The key point: only one space sent (via onData).
-      // Input handler should skip because: insertText + !recentlyComposed + !isComposing → early return
-      // But since we can't guarantee > 300ms in fast test, we verify the total is just [' ']
+      // Input handler: Fix 4 dedup catches it (value === _xtermSentData within 100ms)
       assert.deepEqual(env.sentToPty(), [' '], 'only one space sent total');
     } finally {
       env.restoreRaf();
@@ -413,17 +410,19 @@ describe('Scenario F: Regression tests', () => {
     }
   });
 
-  test('IME-F2: Fix 3 — Shift+symbol with recentlyComposed=true', () => {
+  test('IME-F2: Fix 3 — Shift+symbol without insertText guard (Fix 4 dedup handles regular keys)', () => {
     const env = createImeEnv();
     try {
       env.dispatchTaEvent('compositionstart', {});
       env.dispatchTaEvent('compositionend', {}); // sets _compositionEndedAt = now
       env.flushRaf();
 
-      env.ta.value = '！'; // ！ (Shift+1 via Chinese IME)
+      // IME 激活时按 Shift+1 → 全角 ！
+      // 不需要 keyCode=229 的 keydown — 旧守卫已移除，完全依赖 Fix 4 去重
+      env.ta.value = '！';
       env.dispatchElEvent('input', { inputType: 'insertText', isComposing: false });
 
-      assert.ok(env.sentViaImeSendFn.includes('！'), 'Shift+symbol sent via _imeSendFn during recentlyComposed window');
+      assert.ok(env.sentViaImeSendFn.includes('！'), 'Shift+symbol sent via _imeSendFn (no insertText guard, Fix 4 dedup handles rest)');
     } finally {
       env.restoreRaf();
     }
@@ -484,7 +483,7 @@ describe('Scenario H: Caps Lock during composition', () => {
     }
   });
 
-  test('IME-H3: Full Caps Lock flow — no stale pinyin duplicated', () => {
+  test('IME-H3: Full Caps Lock flow — pinyin spaces filtered by onData', () => {
     const env = createImeEnv();
     try {
       // 1. composition 中输入拼音
@@ -497,14 +496,12 @@ describe('Scenario H: Caps Lock during composition', () => {
       // 3. Caps Lock keydown — 被 _compositionJustEnded 拦截
       env.dispatchTaEvent('keydown', { keyCode: 20, isComposing: false, stopImmediatePropagation: () => {} });
 
-      // 4. xterm 只通过 compositionend 的 _finalizeComposition(true) 发一次
-      env.simulateXtermOnData('women');
+      // 4. xterm 通过 _finalizeComposition(true) 或 _handleAnyTextareaChanges 发送 "wo men"
+      //    onData 路径的 Fix 5 过滤器清理空格 → "women"（不限 recentlyComposed）
+      env.simulateXtermOnData('wo men');
 
-      // 5. 假设 _finalizeComposition(false) 也试图发一次（不应到达，但安全网兜底）
-      env.simulateXtermOnData('wo men'); // 不同的数据，不触发 dedup
-
-      assert.deepEqual(env.sentViaOnData, ['women', 'wo men'],
-        'Fix 2 blocked Caps Lock keydown; data sent only through normal compositionend path');
+      assert.deepEqual(env.sentViaOnData, ['women'],
+        'pinyin spaces filtered by onData: "wo men" → "women"');
     } finally {
       env.restoreRaf();
     }
@@ -518,11 +515,11 @@ describe('Scenario H: Caps Lock during composition', () => {
       env.dispatchTaEvent('compositionend', {});
 
       // _finalizeComposition(false) 和 (true) 都发相同数据
-      env.simulateXtermOnData('wo men'); // 第一次 → 通过
+      env.simulateXtermOnData('wo men'); // 第一次 → Fix 5 cleans to "women"
       env.simulateXtermOnData('wo men'); // 第二次 → dedup!
 
-      assert.deepEqual(env.sentViaOnData, ['wo men'],
-        'duplicate "wo men" deduped by onData safety net');
+      assert.deepEqual(env.sentViaOnData, ['women'],
+        'duplicate "wo men" deduped by onData safety net, Fix 5 also cleans spaces');
     } finally {
       env.restoreRaf();
     }
@@ -731,13 +728,13 @@ describe('Scenario G: Chinese input normal flow', () => {
       env.simulateXtermOnData('你');
 
       // IME 仍激活，按 Shift+1 → 全角 ！
-      // _compositionEndedAt 在 300ms 内 → recentlyComposed = true
-      // insertText 进入 Fix 3 路径
+      // 无需 keyCode=229 的 keydown — 旧守卫已移除
+      // insertText 进入 Fix 3 路径，Fix 4 去重不匹配（'！' !== '你'）
       env.ta.value = '！';
       env.dispatchElEvent('input', { inputType: 'insertText', isComposing: false });
 
       assert.ok(env.sentViaImeSendFn.includes('！'),
-        'fullwidth ！ sent via _imeSendFn (Fix 3 path)');
+        'fullwidth ！ sent via _imeSendFn (Fix 3 path, no insertText guard)');
       assert.equal(env.ta.value, '', 'textarea cleared after Fix 3');
     } finally {
       env.restoreRaf();
@@ -871,6 +868,142 @@ describe('Edge cases', () => {
       const altStopProp = env.trackCalls();
       env.dispatchTaEvent('keydown', { keyCode: 18, isComposing: true, stopImmediatePropagation: altStopProp });
       assert.ok(!altStopProp.wasCalled(), 'Alt (keyCode 18) not blocked during composition');
+    } finally {
+      env.restoreRaf();
+    }
+  });
+});
+
+// ── Scenario I: Fix 5 — Caps Lock compositionend 清空 textarea ──
+//
+// macOS Caps Lock 切换输入法时，IME 将原始拼音（含音节分隔空格）
+// 提交到 textarea。Fix 5 在 compositionend capture 阶段同步清空
+// textarea（尽力阻止 xterm 发送脏数据），拼音过滤由 onData 路径兜底。
+
+describe('Scenario I: Fix 5 — Synchronous textarea clear on pinyin', () => {
+  test('IME-I1: Caps Lock interrupt — pinyin textarea cleared', () => {
+    const env = createImeEnv();
+    try {
+      env.dispatchTaEvent('compositionstart', {});
+      env.dispatchTaEvent('keydown', { keyCode: 229, isComposing: true, stopImmediatePropagation: () => {} });
+
+      env.ta.value = 'wo men';
+      env.dispatchTaEvent('compositionend', {});
+
+      // textarea 被清空（尽力阻止 xterm 读取脏数据）
+      assert.equal(env.ta.value, '', 'textarea cleared for pinyin');
+      // _imeSendFn 不再由 Fix 5 调用，拼音过滤完全由 onData 路径处理
+      assert.deepEqual(env.sentViaImeSendFn, [], '_imeSendFn not triggered by Fix 5');
+    } finally {
+      env.restoreRaf();
+    }
+  });
+
+  test('IME-I2: Normal Chinese commit — textarea NOT touched (non-ASCII text)', () => {
+    const env = createImeEnv();
+    try {
+      env.dispatchTaEvent('compositionstart', {});
+      env.dispatchTaEvent('keydown', { keyCode: 229, isComposing: true, stopImmediatePropagation: () => {} });
+      env.dispatchTaEvent('keydown', { keyCode: 32, isComposing: true, stopImmediatePropagation: () => {} });
+
+      env.ta.value = '我们';
+      env.dispatchTaEvent('compositionend', {});
+
+      assert.equal(env.ta.value, '我们', 'Chinese text NOT cleared');
+      assert.deepEqual(env.sentViaImeSendFn, [], '_imeSendFn not triggered');
+    } finally {
+      env.restoreRaf();
+    }
+  });
+
+  test('IME-I3: Pinyin without spaces — no regex match, textarea untouched', () => {
+    const env = createImeEnv();
+    try {
+      env.dispatchTaEvent('compositionstart', {});
+      env.ta.value = 'women';
+      env.dispatchTaEvent('compositionend', {});
+
+      assert.equal(env.ta.value, 'women', 'pinyin without spaces: textarea NOT cleared');
+    } finally {
+      env.restoreRaf();
+    }
+  });
+
+  test('IME-I4: onData pinyin filter — "wo men" → "women" (no recentlyComposed dependency)', () => {
+    const env = createImeEnv();
+    try {
+      // 不需要 composition 流程 — 过滤不限 recentlyComposed
+      env.simulateXtermOnData('wo men');
+      assert.deepEqual(env.sentViaOnData, ['women'], 'pinyin filter in onData works without recentlyComposed');
+
+      env.simulateXtermOnData('ni hao ma');
+      assert.deepEqual(env.sentViaOnData, ['women', 'nihaoma'], 'multi-syllable filter works');
+    } finally {
+      env.restoreRaf();
+    }
+  });
+});
+
+// ── Scenario J: Fix 3 改进验证 — 移除 insertText 守卫，依赖 Fix 4 去重 ──
+
+describe('Scenario J: Fix 3 improved — no insertText guard, Fix 4 dedup', () => {
+  test('IME-J1: English input — Fix 4 dedup catches it (xterm sent same data)', () => {
+    const env = createImeEnv();
+    try {
+      // 英文模式按键 — xterm 通过 onData 发送
+      env.dispatchTaEvent('keydown', { keyCode: 65, isComposing: false, stopImmediatePropagation: () => {} });
+      env.simulateXtermOnData('a');
+
+      env.ta.value = 'a';
+      env.dispatchElEvent('input', { inputType: 'insertText', isComposing: false });
+
+      assert.deepEqual(env.sentViaOnData, ['a'], 'English char via onData');
+      assert.deepEqual(env.sentViaImeSendFn, [], 'Fix 4 dedup caught it — value === _xtermSentData');
+    } finally {
+      env.restoreRaf();
+    }
+  });
+
+  test('IME-J2: IME Shift+symbol without prior composition — _imeSendFn sends', () => {
+    const env = createImeEnv();
+    try {
+      // 无前序 composition，IME 直接插入全角字符
+      env.ta.value = '！';
+      env.dispatchElEvent('input', { inputType: 'insertText', isComposing: false });
+
+      assert.ok(env.sentViaImeSendFn.includes('！'),
+        'IME Shift+1 sent via _imeSendFn (no insertText guard, Fix 4 doesn\'t match)');
+    } finally {
+      env.restoreRaf();
+    }
+  });
+
+  test('IME-J3: _compositionJustEnded auto-resets after 200ms', async () => {
+    const env = createImeEnv();
+    try {
+      env.dispatchTaEvent('compositionstart', {});
+      env.dispatchTaEvent('compositionend', {}); // sets _compositionJustEnded = true
+
+      // Wait for 200ms timeout to fire
+      await new Promise(r => setTimeout(r, 210));
+
+      // After 200ms, _compositionJustEnded should be false
+      // So a normal keydown should NOT be blocked
+      const stopProp = env.trackCalls();
+      env.dispatchTaEvent('keydown', { keyCode: 65, isComposing: false, stopImmediatePropagation: stopProp });
+
+      assert.ok(!stopProp.wasCalled(), '_compositionJustEnded auto-reset after 200ms — normal keydown NOT blocked');
+    } finally {
+      env.restoreRaf();
+    }
+  });
+
+  test('IME-J4: onData pinyin filter — "wo men" → "women" (no recentlyComposed)', () => {
+    const env = createImeEnv();
+    try {
+      // 不需要 composition 流程 — 过滤不限 recentlyComposed
+      env.simulateXtermOnData('wo men');
+      assert.deepEqual(env.sentViaOnData, ['women'], 'pinyin filter works without recentlyComposed');
     } finally {
       env.restoreRaf();
     }
