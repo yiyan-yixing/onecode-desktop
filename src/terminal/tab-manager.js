@@ -129,7 +129,9 @@ export class TabManager {
       this.updateStatus(id, 'exited', code);
     });
 
-    const dataDisposable = term.onData((data) => ipc.ptyWrite(id, data));
+    const dataDisposable = term.onData((data) => {
+      ipc.ptyWrite(id, term.imeFilter ? term.imeFilter(data) : data);
+    });
     const resizeDisposable = term.onResize(({ cols, rows }) => ipc.ptyResize(id, cols, rows));
 
     const mention = new MentionController({
@@ -236,7 +238,9 @@ export class TabManager {
         const unlistenExit = ipc.onPtyExit(realId, (code) => {
           this.updateStatus(realId, 'exited', code);
         });
-        const dataDisposable = st.term.onData((data) => ipc.ptyWrite(realId, data));
+        const dataDisposable = st.term.onData((data) => {
+          ipc.ptyWrite(realId, st.term.imeFilter ? st.term.imeFilter(data) : data);
+        });
         const resizeDisposable = st.term.onResize(({ cols, rows }) => ipc.ptyResize(realId, cols, rows));
         const mention = new MentionController({
           term: st.term, termEl: st.termEl, popEl: this.mentionPop,

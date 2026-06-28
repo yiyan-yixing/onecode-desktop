@@ -6,18 +6,19 @@
 // xterm 的 compositionHelper 读取 textarea.value，导致旧粘贴内容被重复发送。
 // 修复：paste 后用 requestAnimationFrame 清空 textarea.value（xterm 已先处理）。
 //
-// Fix 2: 非 IME 按键（Caps Lock/中/英切换键等）导致组合输入重复发送
-// 原理：当 IME 组合输入进行中（_isComposing=true），如果收到非 IME 按键
-// （keyCode != 229 且 != 16/17/18），xterm 的 CompositionHelper.keydown()
-// 调用 _finalizeComposition(false) 立即发送组合文本。随后 compositionend 事件
-// 触发 _finalizeComposition(true)，其 setTimeout 回调再次读取 textarea.value
-// 并重复发送同样的数据。这是 xterm.js 的已知 bug（_finalizeComposition(false)
-// 未设置 _dataAlreadySent，导致后续 _finalizeComposition(true) 无法去重）。
-// 修复：跟踪组合状态和"过早终结"标志，在 compositionend 中检测到过早终结时
-// 同步清空 textarea.value，使 setTimeout 回调读到空字符串而跳过发送。
-//
-// Desktop 版本：xterm 内置 compositionHelper 在桌面端能正确处理 CJK 基本流程，
-// 故**不**添加 compositionstart/compositionend/keydown 的完全拦截。
+// Fix 2: 中文 IME 组合输入被中断时发送含空格的原始拼音 + 重复发送
+// 原理：macOS 中文输入法在按 Caps Lock（中/英切换键）中断组合输入时：
+//   (a) xterm 的 _finalizeComposition(false) 在 keydown 中读取 textarea，
+//       此时 textarea 包含原始拼音文本（如 "wo men"），音节间有空格分隔符。
+//   (b) compositionend → _finalizeComposition(true) → setTimeout 再次发送。
+//   (c) input 事件触发 _inputEvent 也发送数据。
+//   结果：终端收到 "wo men"（含多余空格）且可能重复。
+// 修复：在 onData 层面（imeFilter）做两件事——
+//   1. 去空格：在 IME 组合期间或结束后 100ms 内，如果发送的数据是纯 ASCII
+//      字母+空格（原始拼音特征），去掉空格（"wo men" → "women"）
+//   2. 去重复：100ms 内如果收到和上次完全相同的多字符数据，丢弃（只发一次）
+//   优势：不干预 xterm 事件处理流程，不受事件触发顺序影响，
+//         兼容 keydown 先于/后于 compositionend 的两种时序。
 
 export function initImeFix(term) {
   const ta = term.textarea || (term.element && term.element.querySelector('textarea'));
@@ -26,38 +27,44 @@ export function initImeFix(term) {
   // ── Fix 1: paste 后清空 textarea 残留 ──
   ta.addEventListener('paste', () => {
     requestAnimationFrame(() => {
-      // 等 xterm 自身 paste handler 跑完后再清空，避免影响本次粘贴发送
       ta.value = '';
     });
   });
 
-  // ── Fix 2: 非 IME 按键导致组合输入重复发送 ──
+  // ── Fix 2: IME composition 数据层过滤 ──
   let isComposing = false;
-  let compositionPrematurelyFinalized = false;
+  let imeEndWindow = 0;
+  let lastSentData = '';
+  let lastSentTime = 0;
 
-  // 跟踪组合状态（capture phase，在 xterm 之后执行）
   ta.addEventListener('compositionstart', () => {
     isComposing = true;
-    compositionPrematurelyFinalized = false;
   }, true);
 
   ta.addEventListener('compositionend', () => {
     isComposing = false;
-    if (compositionPrematurelyFinalized) {
-      // xterm 的 _finalizeComposition(false) 已经在 keydown 中发送了数据。
-      // 现在 compositionend 触发，xterm 的 _finalizeComposition(true) 会安排
-      // setTimeout 重新读取 textarea.value 并发送——这就是重复的来源。
-      // 同步清空 textarea.value，使 setTimeout 回调读到空字符串，跳过发送。
-      ta.value = '';
-      compositionPrematurelyFinalized = false;
-    }
+    imeEndWindow = Date.now() + 100;
   }, true);
 
-  // 检测组合期间的"过早终结"按键
-  // keyCode 229 = IME 字符，16/17/18 = 修饰键——这些不会触发 _finalizeComposition(false)
-  ta.addEventListener('keydown', (e) => {
-    if (isComposing && e.keyCode !== 229 && e.keyCode !== 16 && e.keyCode !== 17 && e.keyCode !== 18) {
-      compositionPrematurelyFinalized = true;
+  term.imeFilter = (data) => {
+    const now = Date.now();
+
+    // 去空格：IME 组合期间或结束后 100ms 内，
+    // 如果数据是纯 ASCII 字母+空格（原始拼音特征），去掉空格
+    // 例："wo men" → "women"
+    // 安全性：仅在 IME 窗口内对纯字母+空格生效，不影响正常英文输入
+    if ((isComposing || now < imeEndWindow) && /^[a-z ]+$/i.test(data) && data.includes(' ')) {
+      data = data.replace(/ /g, '');
     }
-  }, true);
+
+    // 去重复：100ms 内收到和上次完全相同的多字符数据，丢弃
+    // 防止 _finalizeComposition(false) + setTimeout/_inputEvent 重复发送
+    if (data.length > 1 && data === lastSentData && (now - lastSentTime) < 100) {
+      return '';
+    }
+
+    lastSentData = data;
+    lastSentTime = now;
+    return data;
+  };
 }
