@@ -13,7 +13,7 @@ const IDENTITY_COLORS = [
   { color: 'var(--id-amber)',   glow: 'var(--glow-amber)',    hex: '#F7C948' },
   { color: 'var(--id-sky)',     glow: 'var(--glow-sky)',      hex: '#7DD3FC' },
   { color: 'var(--id-peach)',   glow: 'var(--glow-peach)',    hex: '#FB923C' },
-  { color: 'var(--id-lime)',    glow: 'var(--id-lime)',     hex: '#84CC16' },
+  { color: 'var(--id-lime)',    glow: 'var(--glow-lime)',     hex: '#84CC16' },
   { color: 'var(--id-fuchsia)', glow: 'var(--glow-fuchsia)',  hex: '#D946EF' },
   { color: 'var(--id-teal)',    glow: 'var(--glow-teal)',     hex: '#2DD4BF' },
 ];
@@ -38,6 +38,7 @@ export class OrbitalController {
     this._filesView = null;
     this._fileExplorer = null;
     this._projectsLoaded = false;
+    this._backends = []; // cached list from list_backends
   }
 
   init(tm) {
@@ -50,10 +51,33 @@ export class OrbitalController {
     // Context menu
     this.el.addEventListener('contextmenu', (e) => {
       const orb = e.target.closest('.orb');
-      if (!orb) return;
-      e.preventDefault();
-      this._showCtxMenu(e, orb.dataset.id);
+      const projCard = e.target.closest('.project-card');
+      if (orb) {
+        e.preventDefault();
+        this._showCtxMenu(e, orb.dataset.id);
+      } else if (projCard) {
+        e.preventDefault();
+        const proj = this._projectByCard(projCard);
+        if (proj) this._showProjectCtxMenu(e, proj);
+      }
     });
+
+    // Pre-load backends list
+    this._loadBackends();
+  }
+
+  async _loadBackends() {
+    try {
+      this._backends = await ipc.listBackends();
+      // Populate backend install hints cache in TabManager
+      if (this.tm && this._backends.length) {
+        const hints = new Map(this._backends.map(b => [b.id, b.install_hint]));
+        this.tm.setBackendHints(hints);
+      }
+    } catch (e) {
+      console.warn('[orbital] list_backends failed', e);
+      this._backends = [];
+    }
   }
 
   // ── Tab Bar ──
@@ -105,7 +129,7 @@ export class OrbitalController {
     }
   }
 
-  /** Switch to Files tab (called by ⌘⇧F shortcut). */
+  /** Switch to Files tab (called by Cmd+Shift+F shortcut). */
   switchToFiles() {
     const sidebar = this.el;
     if (sidebar.classList.contains('collapsed')) {
@@ -162,6 +186,20 @@ export class OrbitalController {
   // ── Project List ──
 
   async _loadProjects() {
+    // ★ 去抖：300ms 内多次调用只执行最后一次，避免 onChange 频繁触发 DOM 全量重建
+    if (this._loadProjectsTimer) clearTimeout(this._loadProjectsTimer);
+    this._loadProjectsTimer = setTimeout(async () => {
+      this._loadProjectsTimer = null;
+      await this._doLoadProjects();
+    }, 300);
+  }
+
+  async _doLoadProjects() {
+    const container = this._projectListView.querySelector('.project-list');
+    if (container) {
+      container.innerHTML = '<div class="fe-loading">加载中…</div>';
+    }
+
     try {
       const projects = await ipc.listProjects();
       this._projects = projects || [];
@@ -178,7 +216,17 @@ export class OrbitalController {
     if (!container) return;
     container.innerHTML = '';
 
-    if (this._projects.length === 0) {
+    // ★ 前端去重：按 (id || name) 去重，避免同名不同 ID 的项目重复显示
+    const seenIds = new Set();
+    const dedupedProjects = [];
+    for (const proj of this._projects) {
+      const projId = proj.id || proj.name;
+      if (seenIds.has(projId)) continue;
+      seenIds.add(projId);
+      dedupedProjects.push(proj);
+    }
+
+    if (dedupedProjects.length === 0) {
       const empty = document.createElement('div');
       empty.className = 'project-empty';
       empty.textContent = '尚无项目';
@@ -186,18 +234,25 @@ export class OrbitalController {
       return;
     }
 
-    this._projects.forEach((proj, i) => {
+    dedupedProjects.forEach((proj, i) => {
       const projId = proj.id || proj.name;
 
       // Count active terminals for this project
+      // ★ 修复: 只用 projectId 精确匹配，不用 cwd OR 条件
+      // OR 条件导致共享目录的多个项目重复计入同一个终端
       let runningCount = 0;
+      let exitedCount = 0;
       let lastRunningId = null;
+      let lastAnyId = null;
       if (this.tm && this.tm.tabs) {
         this.tm.tabs.forEach((st) => {
-          if ((st.projectId === projId || st.cwd === proj.dir) && !st.isError) {
-            if (st.status === 'running') {
+          if (st.projectId === projId) {
+            lastAnyId = st.id;
+            if (st.status === 'running' && !st.isError) {
               runningCount++;
               lastRunningId = st.id;
+            } else {
+              exitedCount++;
             }
           }
         });
@@ -212,14 +267,18 @@ export class OrbitalController {
       const identity = IDENTITY_COLORS[i % IDENTITY_COLORS.length];
       const initial = (proj.name || '?')[0].toUpperCase();
 
+      const projBackend = proj.backend || null;
+      const projBackendDisplay = projBackend ? (this._backends.find(b => b.id === projBackend)?.display_name || projBackend) : null;
+
       card.innerHTML =
         `<div class="project-icon" style="background:${identity.hex}22;color:${identity.hex}">${esc(initial)}</div>` +
         `<div class="project-info">` +
-        `<div class="project-name">${esc(proj.name)}</div>` +
+        `<div class="project-name">${esc(proj.name)}${projBackendDisplay ? `<span class="project-backend-badge">${esc(projBackendDisplay)}</span>` : ''}</div>` +
         (proj.dir ? `<div class="project-dir">${esc(proj.dir.split('/').pop())}</div>` : '') +
         (proj.description ? `<div class="project-desc">${esc(proj.description)}</div>` : '') +
         `</div>` +
         (runningCount > 0 ? `<span class="project-count has">${runningCount} 活跃</span>` : '') +
+        (exitedCount > 0 ? `<span class="project-count exited">${exitedCount} 异常</span>` : '') +
         `<button class="project-more" title="更多">⋯</button>`;
 
       // Click → switch to existing terminal, or create one for this project
@@ -227,15 +286,26 @@ export class OrbitalController {
         if (e.target.closest('.project-more')) return;
         const projId2 = proj.id || proj.name;
         if (this.tm && this.tm.tabs) {
+          // ★ 修复: 优先切换到 running tab，其次切换到 error/exited tab
+          // 之前 !st.isError 导致 error tab 被跳过，每次点击都创建新终端
+          let firstRunning = null;
+          let firstAny = null;
           for (const [tid, st] of this.tm.tabs) {
-            if ((st.projectId === projId2 || st.cwd === proj.dir) && !st.isError) {
-              this.tm.switchTo(tid);
-              return;
+            if (st.projectId === projId2) {
+              if (!firstAny) firstAny = tid;
+              if (!st.isError && st.status === 'running' && !firstRunning) {
+                firstRunning = tid;
+              }
             }
           }
+          const targetId = firstRunning || firstAny;
+          if (targetId) {
+            this.tm.switchTo(targetId);
+            return;
+          }
         }
-        // No terminal yet — create one
-        this.tm.createTab({ label: proj.name, cwd: proj.dir, projectId: projId2 });
+        // No terminal yet — create one, pass backend from project metadata
+        this.tm.createTab({ label: proj.name, cwd: proj.dir, projectId: projId2, backend: projBackend });
       });
 
       // ⋯ button → project action menu (compute termIds at click time, not render time)
@@ -245,7 +315,8 @@ export class OrbitalController {
         const nowTermIds = [];
         if (this.tm && this.tm.tabs) {
           this.tm.tabs.forEach((st, tid) => {
-            if ((st.projectId === projId2 || st.cwd === proj.dir) && !st.isError) {
+            // ★ 修复: error/exited tab 也应计入，用户可从菜单操作
+            if (st.projectId === projId2) {
               nowTermIds.push(tid);
             }
           });
@@ -284,6 +355,22 @@ export class OrbitalController {
 
     const home = await getHome();
 
+    // Refresh backends list
+    await this._loadBackends();
+
+    // Build backend selector HTML
+    const backends = this._backends || [];
+    const installed = backends.filter(b => b.installed);
+    const uninstalled = backends.filter(b => !b.installed);
+    const sortedBackends = [...installed, ...uninstalled];
+
+    const backendOptionsHtml = sortedBackends.map(b => {
+      const icon = b.installed ? '✓' : '✗';
+      const cls = b.installed ? '' : ' disabled';
+      const selected = b.id === 'claude-code' ? ' selected' : '';
+      return `<option value="${esc(b.id)}"${cls}${selected}>${icon} ${esc(b.display_name)}</option>`;
+    }).join('');
+
     // Create overlay + dialog (same pattern as Palette)
     const overlay = document.createElement('div');
     overlay.id = 'newProjectOverlay';
@@ -297,6 +384,10 @@ export class OrbitalController {
         `<div class="np-body">` +
           `<label class="np-label">项目名称</label>` +
           `<input type="text" id="npName" class="np-input" placeholder="my-project" autocomplete="off" spellcheck="false">` +
+          `<label class="np-label">后端</label>` +
+          `<div class="np-backend-row">` +
+            `<select id="npBackend" class="np-select">${backendOptionsHtml}</select>` +
+          `</div>` +
           `<label class="np-label">项目目录</label>` +
           `<div class="np-dir-row">` +
             `<input type="text" id="npDir" class="np-input np-mono" placeholder="${home}/my-project" autocomplete="off" spellcheck="false">` +
@@ -317,6 +408,7 @@ export class OrbitalController {
     const nameInput = overlay.querySelector('#npName');
     const dirInput = overlay.querySelector('#npDir');
     const descInput = overlay.querySelector('#npDesc');
+    const backendSelect = overlay.querySelector('#npBackend');
     const confirmBtn = overlay.querySelector('#npConfirm');
 
     nameInput.focus();
@@ -353,12 +445,16 @@ export class OrbitalController {
       }
     });
 
-    // Confirm button state
+    // Confirm button state — also check that selected backend is installed
     const updateConfirmState = () => {
       const name = (nameInput.value || '').trim();
-      confirmBtn.disabled = !name;
+      const selBackend = backendSelect.value;
+      const beInfo = backends.find(b => b.id === selBackend);
+      confirmBtn.disabled = !name || (beInfo && !beInfo.installed);
     };
     updateConfirmState();
+
+    backendSelect.addEventListener('change', updateConfirmState);
 
     const close = () => {
       overlay.classList.remove('on');
@@ -370,16 +466,16 @@ export class OrbitalController {
       const name = (nameInput.value || '').trim();
       const dir = (dirInput.value || '').trim();
       const desc = (descInput.value || '').trim();
+      const backend = backendSelect.value || null;
       if (!name) return;
       close();
       const projectDir = dir || `${home}/${name}`;
       let projectId = name;
       try {
-        const { invoke } = window.__TAURI__.core;
-        const id = await invoke('save_project', { project: { name, dir: projectDir, description: desc } });
+        const id = await ipc.saveProject({ name, dir: projectDir, description: desc, backend });
         if (id) projectId = id;
       } catch (_) {}
-      await this.tm.createTab({ label: name, cwd: projectDir, projectId });
+      await this.tm.createTab({ label: name, cwd: projectDir, projectId, backend });
       this._loadProjects();
     };
 
@@ -397,14 +493,15 @@ export class OrbitalController {
     nameInput.addEventListener('keydown', handleKey);
     dirInput.addEventListener('keydown', handleKey);
     descInput.addEventListener('keydown', handleKey);
+    backendSelect.addEventListener('keydown', handleKey);
   }
 
   // ── Orb Management ──
 
   addOrb(id, label, status, cwd) {
-    // Only show orbs for project terminals (chat is single-instance, no orb needed)
+    // All terminals are project terminals (no chat concept)
     const st = this.tm && this.tm.tabs.get(id);
-    if (!st || !st.projectId) return;
+    if (!st) return;
 
     const identity = nextIdentity();
     const orb = document.createElement('div');
@@ -555,10 +652,8 @@ export class OrbitalController {
       { label: '重命名', action: () => { const orb = this.el.querySelector(`.orb[data-id="${id}"]`); const l = orb?.querySelector('.orb-label'); if (l) this.startRename(id, l); } },
       { label: '重启', action: () => this.tm.restartTab(id) },
     ];
-    // "复制对话" only for project terminals (chat is single-terminal)
-    if (st.projectId) {
-      items.push({ label: '复制对话', action: () => this.tm.createTab({ label: st.label + '-2', cmd: st.cmd, args: st.args, cwd: st.cwd, projectId: st.projectId }) });
-    }
+    // "复制对话" — 所有终端都属项目，皆可复制
+    items.push({ label: '复制对话', action: () => this.tm.createTab({ label: st.label + '-2', cmd: st.cmd, args: st.args, cwd: st.cwd, projectId: st.projectId, backend: st.backend }) });
     items.push(
       { sep: true },
       { label: '复制路径', action: () => { if (st.cwd) navigator.clipboard.writeText(st.cwd); } },
@@ -568,7 +663,11 @@ export class OrbitalController {
 
     items.forEach((it) => {
       if (it.sep) {
-        menu.innerHTML += '<div class="ctx-menu-sep"></div>';
+        // 用 createElement 追加，不用 innerHTML +=
+        // innerHTML += 会序列化再反序列化整个 DOM，销毁之前绑定的 click 监听器
+        const sep = document.createElement('div');
+        sep.className = 'ctx-menu-sep';
+        menu.appendChild(sep);
       } else {
         const el = document.createElement('div');
         el.className = 'ctx-menu-item' + (it.cls ? ' ' + it.cls : '');
@@ -617,20 +716,67 @@ export class OrbitalController {
     }
 
     const projId = proj.id || proj.name;
+    const projBackend = proj.backend || null;
     const items = [];
 
-    // Close — close all terminals of this project
+    // 打开新终端 — 始终可用
+    items.push({ label: '打开新终端', action: () => {
+      this.tm.createTab({ label: proj.name, cwd: proj.dir, projectId: projId, backend: projBackend });
+    }});
+
+    // 在 Finder 中显示 — 始终可用
+    if (proj.dir) {
+      items.push({ label: '在 Finder 中显示', action: () => {
+        const { invoke } = window.__TAURI__.core;
+        invoke('plugin:shell|open', { path: proj.dir }).catch(() => {});
+      }});
+    }
+
+    // 关闭 — 仅在有终端时显示
     if (termIds.length > 0) {
-      items.push({ label: `关闭`, cls: 'danger', action: () => {
+      items.push({ sep: true });
+      items.push({ label: `关闭（${termIds.length} 个终端）`, cls: 'danger', action: () => {
         [...termIds].forEach(tid => this.tm.closeTab(tid));
       }});
     }
 
-    if (items.length === 0) return;
+    // 删除项目 — 始终可用
+    items.push({ sep: true });
+    items.push({ label: '删除项目', cls: 'danger', action: async () => {
+      let activeCount = 0;
+      if (this.tm && this.tm.tabs) {
+        this.tm.tabs.forEach((st) => {
+          if (st.projectId === projId && st.status === 'running') activeCount++;
+        });
+      }
+      const msg = activeCount > 0
+        ? `确定删除项目「${proj.name}」？${activeCount} 个活跃终端将继续运行。`
+        : `确定删除项目「${proj.name}」？`;
+      if (!await this._confirmDialog(msg)) return;
+      try {
+        await ipc.deleteProject(proj.name);
+        if (this.tm && this.tm.tabs) {
+          const delIds = [];
+          this.tm.tabs.forEach((st, tid) => {
+            if (st.projectId === projId) delIds.push(tid);
+          });
+          for (const tid of delIds) {
+            await this.tm.closeTab(tid);
+          }
+        }
+        this._loadProjects();
+      } catch (err) {
+        console.warn('[project] delete failed', err);
+      }
+    }});
 
     items.forEach((it) => {
       if (it.sep) {
-        menu.innerHTML += '<div class="ctx-menu-sep"></div>';
+        // 用 createElement 追加，不用 innerHTML +=
+        // innerHTML += 会序列化再反序列化整个 DOM，销毁之前绑定的 click 监听器
+        const sep = document.createElement('div');
+        sep.className = 'ctx-menu-sep';
+        menu.appendChild(sep);
       } else {
         const el = document.createElement('div');
         el.className = 'ctx-menu-item' + (it.cls ? ' ' + it.cls : '');
@@ -667,8 +813,9 @@ export class OrbitalController {
     menu.style.left = e.clientX + 'px';
     menu.style.top = e.clientY + 'px';
 
+    const projBackend = proj.backend || null;
     const items = [
-      { label: '打开新终端', action: () => this.tm.createTab({ label: proj.name, cwd: proj.dir, projectId: proj.name }) },
+      { label: '打开新终端', action: () => this.tm.createTab({ label: proj.name, cwd: proj.dir, projectId: proj.id || proj.name, backend: projBackend }) },
       { label: '在 Finder 中显示', action: () => { if (proj.dir) { const { invoke } = window.__TAURI__.core; invoke('plugin:shell|open', { path: proj.dir }).catch(() => {}); } } },
       { sep: true },
       { label: '删除项目', cls: 'danger', action: async () => {
@@ -683,14 +830,18 @@ export class OrbitalController {
         const msg = activeCount > 0
           ? `确定删除项目「${proj.name}」？${activeCount} 个活跃终端将继续运行。`
           : `确定删除项目「${proj.name}」？`;
-        if (!confirm(msg)) return;
+        if (!await this._confirmDialog(msg)) return;
         try {
           await ipc.deleteProject(proj.name);
-          // Detach terminals from this project
+          // Close all terminals belonging to this project
           if (this.tm && this.tm.tabs) {
-            this.tm.tabs.forEach((st) => {
-              if (st.projectId === projId) st.projectId = null;
+            const termIds = [];
+            this.tm.tabs.forEach((st, tid) => {
+              if (st.projectId === projId) termIds.push(tid);
             });
+            for (const tid of termIds) {
+              await this.tm.closeTab(tid);
+            }
           }
           this._loadProjects();
         } catch (err) {
@@ -738,6 +889,53 @@ export class OrbitalController {
     if (!empty) return;
     const hasOrbs = this.el && this.el.querySelectorAll('.orb:not(.exiting)').length > 0;
     empty.classList.toggle('on', !hasOrbs);
+  }
+
+  /** 从 project-card DOM 元素反查项目数据。 */
+  _projectByCard(cardEl) {
+    const pid = cardEl.dataset.projectId;
+    if (!pid || !this._projects) return null;
+    return this._projects.find((p) => (p.id || p.name) === pid) || null;
+  }
+
+  /** 自定义确认弹窗（替代原生 confirm()）。 */
+  _confirmDialog(msg) {
+    return new Promise((resolve) => {
+      const overlay = document.createElement('div');
+      overlay.className = 'np-overlay';
+      overlay.innerHTML =
+        `<div class="np-dialog" style="max-width:360px">` +
+          `<div class="np-header"><div class="np-title">确认操作</div>` +
+          `<button class="np-close" title="取消">✕</button></div>` +
+          `<div class="np-body"><p style="color:var(--tx-warm2);line-height:1.5;margin:0">${esc(msg)}</p></div>` +
+          `<div class="np-footer">` +
+            `<button class="np-btn np-btn-cancel" id="cfCancel">取消</button>` +
+            `<button class="np-btn np-btn-confirm" id="cfOk">确认</button>` +
+          `</div>` +
+        `</div>`;
+      document.body.appendChild(overlay);
+      requestAnimationFrame(() => overlay.classList.add('on'));
+
+      const close = (val) => {
+        overlay.classList.remove('on');
+        overlay.classList.add('dismissing');
+        setTimeout(() => overlay.remove(), 200);
+        resolve(val);
+      };
+
+      overlay.querySelector('#cfOk').addEventListener('click', () => close(true));
+      overlay.querySelector('#cfCancel').addEventListener('click', () => close(false));
+      overlay.querySelector('.np-close').addEventListener('click', () => close(false));
+      overlay.addEventListener('click', (e) => { if (e.target === overlay) close(false); });
+      overlay.querySelector('#cfCancel').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === 'Escape') close(false);
+      });
+      overlay.querySelector('#cfOk').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') close(true);
+        if (e.key === 'Escape') close(false);
+      });
+      overlay.querySelector('#cfCancel').focus();
+    });
   }
 }
 

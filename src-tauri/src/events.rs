@@ -8,3 +8,9 @@
 pub fn pty_exit_event(id: &str) -> String {
     format!("pty:exit:{id}")
 }
+
+/// PTY 进程自动重启成功事件名：`pty:restart:{id}`，payload 为新 pid (Option<u32>)。
+/// 当后端自动重启（非用户手动 restart）成功时 emit，通知前端状态从 exited → running。
+pub fn pty_restart_event(id: &str) -> String {
+    format!("pty:restart:{id}")
+}

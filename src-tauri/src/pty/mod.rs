@@ -28,15 +28,16 @@ use tokio::sync::RwLock;
 use uuid::Uuid;
 
 use crate::config::AppConfig;
+use crate::recover_lock;
 use crate::events;
 
 /// PTY 初始尺寸（对齐 pty.js DEFAULT_COLS/ROWS）
 const DEFAULT_COLS: u16 = 200;
 const DEFAULT_ROWS: u16 = 50;
-/// 批量合并窗口（~30fps，降低渲染频率减轻 WKWebView 闪烁）
-const FLUSH_INTERVAL_MS: u64 = 33;
+/// 批量合并窗口（~20fps，降低渲染频率减轻 WKWebView 闪烁）
+const FLUSH_INTERVAL_MS: u64 = 50;
 /// 超过此阈值立即推送（不等定时器，避免大块输出卡住）
-const FLUSH_IMMEDIATE_BYTES: usize = 64 * 1024;
+const FLUSH_IMMEDIATE_BYTES: usize = 128 * 1024;
 /// mpsc channel 容量
 const PTY_CHAN_CAPACITY: usize = 256;
 /// 自动重启次数上限（对齐 pty.js）
@@ -54,10 +55,11 @@ pub struct SlotSummary {
     pub exit_code: Option<i32>,
     pub cmd: String,
     pub cwd: String,
+    pub backend: String,
 }
 
 /// 终端配置快照（会话持久化用）。不含运行时状态（pid/status/ring buffer），
-/// 仅保留重 spawn 所需的 {id,label,project_id,cmd,args,cwd,env,created_at}。
+/// 仅保留重 spawn 所需的 {id,label,project_id,cmd,args,cwd,env,backend,created_at,last_active_at}。
 #[derive(serde::Serialize, Clone)]
 pub struct SlotConfig {
     pub id: String,
@@ -67,7 +69,9 @@ pub struct SlotConfig {
     pub args: Vec<String>,
     pub cwd: String,
     pub env: HashMap<String, String>,
+    pub backend: String,
     pub created_at: String,
+    pub last_active_at: String,
 }
 
 struct ManagerInner {
@@ -109,6 +113,7 @@ impl MultiPtyManager {
     // ── 结构变更：写锁 ──────────────────────────────────────────────
 
     /// 创建新终端。返回 slot id。
+#[allow(clippy::too_many_arguments)]
     pub async fn spawn(
         &self,
         cmd: String,
@@ -118,6 +123,9 @@ impl MultiPtyManager {
         data_channel: Channel<Vec<u8>>,
         label: Option<String>,
         project_id: Option<String>,
+        backend: String,
+        cols: Option<u16>,
+        rows: Option<u16>,
     ) -> Result<(Uuid, Option<u32>)> {
         {
             let inner = self.inner.read().await;
@@ -127,9 +135,9 @@ impl MultiPtyManager {
         }
 
         let id = Uuid::new_v4();
-        let label = label.unwrap_or_else(|| "New Chat".to_string());
+        let label = label.unwrap_or_else(|| "Terminal".to_string());
         let ring_max = self.config.ring_buffer_max_mb * 1024 * 1024;
-        let slot = Arc::new(TerminalSlot::new(id, label, project_id, cmd, args, cwd, env, ring_max));
+        let slot = Arc::new(TerminalSlot::new(id, label, project_id, cmd, args, cwd, env, backend, ring_max));
 
         let PtyHandles {
             master,
@@ -137,7 +145,7 @@ impl MultiPtyManager {
             reader,
             child,
             pid,
-        } = create_pty(&slot.cmd, &slot.args, &slot.cwd, &slot.env)?;
+        } = create_pty(&slot.cmd, &slot.args, &slot.cwd, &slot.env, cols, rows)?;
         slot.replace_handles(master, killer, pid);
 
         start_reader_batcher(
@@ -179,29 +187,31 @@ impl MultiPtyManager {
     }
 
     /// 手动重启：复用 cmd/args/cwd/env，清空 buffer，重置重启计数。
-    /// 前端传入新的 data_channel（旧 Channel 已失效）。
-    pub async fn restart(&self, id: Uuid, data_channel: Channel<Vec<u8>>) -> Result<()> {
+    /// 前端传入新的 data_channel（旧 Channel 已失效）+ 终端当前尺寸。
+    pub async fn restart(&self, id: Uuid, data_channel: Channel<Vec<u8>>, cols: Option<u16>, rows: Option<u16>) -> Result<()> {
         let slot = self
             .get_slot(id)
             .await
             .ok_or_else(|| anyhow!("slot not found"))?;
 
+        // 从前端获取终端尺寸；若前端未传则从旧 PTY master 读取
+        let effective_cols = cols.or_else(|| slot.get_size().map(|s| s.cols));
+        let effective_rows = rows.or_else(|| slot.get_size().map(|s| s.rows));
+
         // 1. 标记关闭 → 旧 wait 线程退出（不自动重启）
         slot.mark_closed();
-        // 2. 终止旧 PTY
+        // 2. 递增 generation → 旧 wait 线程检测到 generation 不匹配，跳过状态写入
+        slot.bump_generation();
+        // 3. 终止旧 PTY
         let _ = slot.kill();
-        // 3. 给旧 wait 线程退出时间（PTY 关闭后 child.wait() 很快返回）
-        //    TODO(P2): 用 generation 计数替代 sleep，消除竞态。
-        tokio::time::sleep(Duration::from_millis(80)).await;
-
-        // 4. 重新创建 PTY
+        // 4. 重新创建 PTY（使用前端传入的终端尺寸，避免换行/光标错位）
         let PtyHandles {
             master,
             killer,
             reader,
             child,
             pid,
-        } = create_pty(&slot.cmd, &slot.args, &slot.cwd, &slot.env)?;
+        } = create_pty(&slot.cmd, &slot.args, &slot.cwd, &slot.env, effective_cols, effective_rows)?;
         slot.replace_handles(master, killer, pid);
         slot.clear_buffer();
         slot.set_status(SlotStatus::Running);
@@ -280,37 +290,73 @@ impl MultiPtyManager {
             .map(|s| SlotConfig {
                 id: s.id.to_string(),
                 label: s.label(),
-                project_id: s.project_id.lock().expect("project_id poisoned").clone(),
+                project_id: recover_lock!(s.project_id.lock(), "project_id").clone(),
                 cmd: s.cmd.clone(),
                 args: s.args.clone(),
                 cwd: s.cwd.clone(),
                 env: s.env.clone(),
+                backend: s.backend.clone(),
                 created_at: s.created_at.to_rfc3339(),
+                last_active_at: recover_lock!(s.last_active_at.lock(), "last_active_at").clone(),
             })
             .collect()
+    }
+
+    /// 标记指定终端为当前活跃（前端 switchTo 时调用）。
+    pub async fn set_active(&self, id: Uuid) -> Result<()> {
+        let slot = self
+            .get_slot(id)
+            .await
+            .ok_or_else(|| anyhow!("slot not found"))?;
+        slot.touch_active();
+        Ok(())
     }
 
     /// 同步终止所有终端（托盘「退出」用，避免异步 + State 借用生命周期问题）。
     /// 对 tokio RwLock 用 try_write；若拿不到锁（罕见，spawn/restart 进行中）则
     /// 退化为 try_read 逐个 kill（slot.kill 是同步的，无需改结构）。
+    /// P1-15 fix: 若两者都失败，使用受限重试循环（避免 blocking_write 导致
+    /// tokio 运行时死锁），确保退出时不遗漏终端。
     pub fn kill_all_blocking(&self) {
-        let slots: Vec<Arc<TerminalSlot>> = match self.inner.try_write() {
-            Ok(mut inner) => {
-                inner.channels.clear();
-                inner.slots.drain().map(|(_, v)| v).collect()
-            }
-            Err(_) => match self.inner.try_read() {
-                Ok(inner) => inner.slots.values().cloned().collect(),
-                Err(_) => {
-                    log::warn!("[pty] kill_all: lock busy, skip");
-                    return;
-                }
-            },
-        };
-        for s in slots {
+        // Phase 1: acquire slot list (with P1-15 retry fallback)
+        let slots = self.kill_all_acquire_slots();
+        // Phase 2: kill all acquired slots
+        for s in &slots {
             s.mark_closed(); // 让 wait 线程不自动重启
             let _ = s.kill();
         }
+    }
+
+    /// 尝试获取所有终端 slot 的列表用于 kill_all。
+    /// P1-15 fix: 使用受限重试循环（避免 blocking_write 导致 tokio 运行时死锁）。
+    fn kill_all_acquire_slots(&self) -> Vec<Arc<TerminalSlot>> {
+        // Fast path: try_write
+        if let Ok(mut inner) = self.inner.try_write() {
+            inner.channels.clear();
+            return inner.slots.drain().map(|(_, v)| v).collect();
+        }
+        // Fallback 1: try_read (slot.kill is sync, no struct mutation needed)
+        if let Ok(inner) = self.inner.try_read() {
+            return inner.slots.values().cloned().collect();
+        }
+        // P1-15: Both try_write and try_read failed. Use a bounded retry loop
+        // instead of blocking_write (which can deadlock the tokio runtime).
+        log::warn!("[pty] kill_all: lock busy, retrying");
+        for attempt in 0..20 {
+            std::thread::sleep(Duration::from_millis(10));
+            if let Ok(mut inner) = self.inner.try_write() {
+                inner.channels.clear();
+                return inner.slots.drain().map(|(_, v)| v).collect();
+            }
+            if let Ok(inner) = self.inner.try_read() {
+                return inner.slots.values().cloned().collect();
+            }
+            if attempt % 5 == 4 {
+                log::warn!("[pty] kill_all: lock still busy after {}ms", (attempt + 1) * 10);
+            }
+        }
+        log::error!("[pty] kill_all: could not acquire lock after 200ms, some terminals may not be killed");
+        Vec::new()
     }
 }
 
@@ -318,12 +364,13 @@ fn summary_of(s: &Arc<TerminalSlot>) -> SlotSummary {
     SlotSummary {
         id: s.id.to_string(),
         label: s.label(),
-        project_id: s.project_id.lock().expect("project_id poisoned").clone(),
+        project_id: recover_lock!(s.project_id.lock(), "project_id").clone(),
         status: s.status().as_str().to_string(),
-        pid: *s.pid.lock().expect("pid poisoned"),
-        exit_code: *s.exit_code.lock().expect("exit_code poisoned"),
+        pid: *recover_lock!(s.pid.lock(), "pid"),
+        exit_code: *recover_lock!(s.exit_code.lock(), "exit_code"),
         cmd: s.cmd.clone(),
         cwd: s.cwd.clone(),
+        backend: s.backend.clone(),
     }
 }
 
@@ -382,12 +429,14 @@ fn create_pty(
     args: &[String],
     cwd: &str,
     env: &HashMap<String, String>,
+    cols: Option<u16>,
+    rows: Option<u16>,
 ) -> Result<PtyHandles> {
     let pty_system = native_pty_system();
     let pair = pty_system
         .openpty(PtySize {
-            rows: DEFAULT_ROWS,
-            cols: DEFAULT_COLS,
+            rows: rows.unwrap_or(DEFAULT_ROWS),
+            cols: cols.unwrap_or(DEFAULT_COLS),
             pixel_width: 0,
             pixel_height: 0,
         })
@@ -524,6 +573,9 @@ fn start_wait(
     _config: Arc<AppConfig>,
     runtime: Handle,
 ) {
+    // 记录此 wait 线程启动时的 generation，后续操作仅在 generation 匹配时执行
+    let my_gen = slot.current_generation();
+
     std::thread::spawn(move || loop {
         // portable-pty 0.8: Child::wait(&mut self) -> IoResult<ExitStatus>，ExitStatus::success()
         let code = match child.wait() {
@@ -537,28 +589,31 @@ fn start_wait(
             Err(_) => 1,
         };
 
+        // generation 不匹配 → 说明 restart() 已递增 generation，此线程已过期
+        if slot.current_generation() != my_gen {
+            log::debug!("[pty] stale wait thread gen={} current={} id={}, exiting", my_gen, slot.current_generation(), slot.id);
+            return;
+        }
+
         // 用户主动关闭/重启 → 退出，不自动重启
         if slot.is_closed() {
             return;
         }
 
         slot.set_status(SlotStatus::Exited { code });
-        *slot.exit_code.lock().expect("exit_code poisoned") = Some(code);
+        *recover_lock!(slot.exit_code.lock(), "exit_code") = Some(code);
         let id_str = slot.id.to_string();
         let _ = app.emit(&events::pty_exit_event(&id_str), code);
 
         // 稳定运行 >=5s → 重置重启计数（对齐 pty.js:128-133）
-        let stable = slot
-            .spawned_at
-            .lock()
-            .expect("spawned_at poisoned")
+        let stable = recover_lock!(slot.spawned_at.lock(), "spawned_at")
             .map(|t| t.elapsed() >= Duration::from_secs(STABLE_RESET_SECS))
             .unwrap_or(false);
         if stable {
             slot.reset_restart();
         }
 
-        let count = *slot.restart_count.lock().expect("restart_count poisoned");
+        let count = *recover_lock!(slot.restart_count.lock(), "restart_count");
         if count >= MAX_RESTART_COUNT {
             log::error!("[pty] max restart reached id={}", slot.id);
             slot.set_status(SlotStatus::Crashed);
@@ -580,16 +635,20 @@ fn start_wait(
         );
         std::thread::sleep(Duration::from_millis(delay_ms));
 
-        // sleep 期间用户可能主动关闭 → 再次检查
-        if slot.is_closed() {
+        // sleep 期间用户可能主动关闭或重启 → 再次检查
+        if slot.is_closed() || slot.current_generation() != my_gen {
             return;
         }
 
-        match create_pty(&slot.cmd, &slot.args, &slot.cwd, &slot.env) {
+        // 自动重启：从旧 PTY master 读取当前尺寸，避免重启后换行/光标错位
+        let pty_size = slot.get_size();
+        match create_pty(&slot.cmd, &slot.args, &slot.cwd, &slot.env, pty_size.map(|s| s.cols), pty_size.map(|s| s.rows)) {
             Ok(h) => {
                 slot.replace_handles(h.master, h.killer, h.pid);
                 slot.clear_buffer();
                 slot.set_status(SlotStatus::Running);
+                // ★ 通知前端：进程已自动重启，状态从 exited → running
+                let _ = app.emit(&events::pty_restart_event(&id_str), h.pid);
                 start_reader_batcher(slot.clone(), channel.clone(), h.reader, runtime.clone());
                 child = h.child; // 继续等待新进程
             }
