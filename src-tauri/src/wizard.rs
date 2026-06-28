@@ -3,6 +3,7 @@
 //! V1 仅检测 + 提示，不自动安装依赖。
 
 use std::process::Command as StdCommand;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use tauri::State;
@@ -38,6 +39,7 @@ pub struct WizardConfig {
     pub api_key: String,
     pub base_url: String,
     pub model: String,
+    pub backend: String,
 }
 
 // ── 依赖定义 ────────────────────────────────────────────────────────
@@ -84,7 +86,7 @@ const CHECK_TIMEOUT_SECS: u64 = 5;
 pub fn check_environment() -> Result<CheckEnvironmentResult, String> {
     let deps: Vec<DependencyStatus> = DEPS
         .iter()
-        .map(|d| check_one_dep(d))
+        .map(check_one_dep)
         .collect();
 
     let all_ok = deps.iter().all(|d| d.found && d.version_ok);
@@ -123,6 +125,7 @@ pub async fn save_wizard_config(
         base_url: Some(config.base_url),
         model: Some(config.model),
         wizard_completed: Some(true),
+        default_backend: Some(config.backend),
     };
     update.apply_to(&mut cfg);
 
@@ -185,38 +188,53 @@ fn check_one_dep(dep: &DepDef) -> DependencyStatus {
     }
 }
 
-/// 运行命令并等待（带超时）
+/// 运行命令并等待（带超时）。P1-16 fix: 使用 try_wait() 轮询 + 超时 kill，
+/// 避免 Arc<Mutex<Option<Child>>> 的竞态条件和死锁风险。
 fn run_with_timeout(
     cmd: &str,
     args: &[&str],
     timeout_secs: u64,
 ) -> Result<std::process::Output, String> {
-    let child = StdCommand::new(cmd)
+    let mut child = StdCommand::new(cmd)
         .args(args)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
         .map_err(|e| format!("spawn {cmd} failed: {e}"))?;
 
-    // 用 thread + timeout 模拟 wait_timeout（std 没有 wait_timeout）
-    let handle = child;
-    let result = std::thread::scope(|s| {
-        let h = s.spawn(move || handle.wait_with_output());
-        // 等待超时或完成
-        match h.join() {
-            Ok(Ok(output)) => Ok(output),
-            Ok(Err(e)) => Err(format!("wait {cmd} failed: {e}")),
-            Err(_) => Err(format!("{cmd} timed out after {timeout_secs}s")),
-        }
-    });
+    let timeout = Duration::from_secs(timeout_secs);
+    let start = std::time::Instant::now();
 
-    result
+    loop {
+        match child.try_wait() {
+            Ok(Some(_status)) => {
+                // 子进程已退出，收集输出
+                return child
+                    .wait_with_output()
+                    .map_err(|e| format!("wait {cmd} failed: {e}"));
+            }
+            Ok(None) => {
+                // 子进程仍在运行，检查超时
+                if start.elapsed() > timeout {
+                    let _ = child.kill();
+                    let _ = child.wait(); // 回收，避免僵尸进程
+                    return Err(format!("{cmd} timed out after {timeout_secs}s"));
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("{cmd} wait error: {e}"));
+            }
+        }
+    }
 }
 
 /// 从命令输出解析版本号（提取首个 semver-like 字符串）
 fn parse_version(output: &str) -> Option<String> {
     // 匹配 x.y.z 或 x.y 格式
-    let _re = regex_simple();
+    regex_simple();
     for part in output.split_whitespace() {
         if is_semver_like(part) {
             return Some(part.to_string());

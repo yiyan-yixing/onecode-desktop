@@ -1,4 +1,4 @@
-// Setup Wizard — 3 步引导：环境检测 → API 配置 → 完成
+// Setup Wizard — 3 步引导：环境检测 → 后端 + API 配置 → 完成
 //
 // 状态机：WELCOME → CHECKING → ENV_RESULT → CONFIG_FORM → SAVING → DONE / ERROR
 // 挂载为全屏 overlay，完成后淡出移除，主界面自然显现。
@@ -19,9 +19,32 @@ const S = {
 
 let state = S.WELCOME;
 let envResult = null;       // CheckEnvironmentResult
-let formData = { apiKey: '', baseUrl: 'https://api.anthropic.com', model: 'claude-sonnet-4-6' };
+let backends = [];          // BackendInfo[] from list_backends
+let formData = { apiKey: '', baseUrl: 'https://api.anthropic.com', model: 'claude-sonnet-4-6', backend: 'claude-code' };
 let errorMsg = '';
 let resolveWizard = null;   // 外部 Promise 的 resolve
+
+// Backend-specific form label/placeholder overrides
+const BACKEND_FORM_CONFIG = {
+  'claude-code': {
+    apiKeyLabel: 'API Key',
+    apiKeyPlaceholder: 'sk-ant-…',
+    baseUrlDefault: 'https://api.anthropic.com',
+    modelDefault: 'claude-sonnet-4-6',
+    envKeyHint: 'ANTHROPIC_API_KEY',
+  },
+  'opencode': {
+    apiKeyLabel: 'API Key',
+    apiKeyPlaceholder: 'sk-…',
+    baseUrlDefault: 'https://api.anthropic.com',
+    modelDefault: 'claude-sonnet-4-6',
+    envKeyHint: 'ANTHROPIC_API_KEY',
+  },
+};
+
+function getBackendFormConfig(backendId) {
+  return BACKEND_FORM_CONFIG[backendId] || BACKEND_FORM_CONFIG['claude-code'];
+}
 
 // ── 公共接口 ──────────────────────────────────────────────────────
 
@@ -167,10 +190,15 @@ function renderChecking(body, footer) {
 
 async function runCheck() {
   try {
-    envResult = await ipc.checkEnvironment();
+    const [envRes, backendRes] = await Promise.all([
+      ipc.checkEnvironment(),
+      ipc.listBackends(),
+    ]);
+    envResult = envRes;
+    backends = backendRes || [];
     transition(S.ENV_RESULT);
   } catch (e) {
-    console.warn('[wizard] checkEnvironment failed:', e);
+    console.warn('[wizard] checkEnvironment/listBackends failed:', e);
     envResult = {
       dependencies: [
         makeFakeDep('claude', 'Detection failed'),
@@ -179,6 +207,7 @@ async function runCheck() {
       ],
       all_ok: false,
     };
+    backends = [];
     transition(S.ENV_RESULT);
   }
 }
@@ -191,10 +220,38 @@ function renderEnvResult(body, footer) {
   const deps = envResult?.dependencies || [];
   const allOk = envResult?.all_ok;
 
+  // Build backend status section
+  const installedBackends = backends.filter(b => b.installed);
+  const uninstalledBackends = backends.filter(b => !b.installed);
+
+  let backendSection = '';
+  if (backends.length > 0) {
+    backendSection = `
+      <div class="wizard-backend-section">
+        <h3>AI 后端</h3>
+        ${backends.map(b => `
+          <div class="wizard-dep ${b.installed ? 'ok' : 'fail'}">
+            <div class="wizard-dep-icon">
+              ${b.installed ? '✓' : '✗'}
+            </div>
+            <div class="wizard-dep-info">
+              <div class="wizard-dep-name">${escapeHtml(b.display_name)}</div>
+              <div class="wizard-dep-ver">${b.installed ? `命令: ${escapeHtml(b.cmd)}` : '未安装'}</div>
+              ${!b.installed ? `<div class="wizard-dep-hint">${escapeHtml(b.install_hint)}</div>` : ''}
+            </div>
+            ${!b.installed ? `
+              <button class="wizard-copy-btn" data-hint="${escapeAttr(b.install_hint)}" title="复制安装命令">📋</button>
+            ` : ''}
+          </div>
+        `).join('')}
+      </div>
+    `;
+  }
+
   body.innerHTML = `
     <div class="wizard-env">
       <h2>环境检测</h2>
-      <p class="wizard-env-subtitle">${allOk ? '✅ 所有依赖已就绪' : '部分依赖缺失，但不影响继续配置'}</p>
+      <p class="wizard-env-subtitle">${allOk && installedBackends.length > 0 ? '✅ 所有依赖已就绪' : '部分依赖缺失，但不影响继续配置'}</p>
       <div class="wizard-deps">
         ${deps.map(dep => `
           <div class="wizard-dep ${dep.found && dep.version_ok ? 'ok' : dep.found ? 'warn' : 'fail'}">
@@ -212,6 +269,7 @@ function renderEnvResult(body, footer) {
           </div>
         `).join('')}
       </div>
+      ${backendSection}
     </div>
   `;
 
@@ -221,6 +279,9 @@ function renderEnvResult(body, footer) {
       const hint = btn.dataset.hint;
       navigator.clipboard.writeText(hint).then(() => {
         btn.textContent = '✓';
+        setTimeout(() => btn.textContent = '📋', 1500);
+      }).catch(() => {
+        btn.textContent = '✗';
         setTimeout(() => btn.textContent = '📋', 1500);
       });
     });
@@ -239,19 +300,44 @@ function depName(n) {
   return { claude: 'Claude Code CLI', node: 'Node.js', git: 'Git' }[n] || n;
 }
 
-// ── Step 2: API 配置 ────────────────────────────────────────────────
+// ── Step 2: Backend selector + API 配置 ────────────────────────────────
 
 function renderConfigForm(body, footer) {
+  const installed = backends.filter(b => b.installed);
+  const uninstalled = backends.filter(b => !b.installed);
+  const sortedBackends = [...installed, ...uninstalled];
+
+  // Build backend selector
+  let backendSelector = '';
+  if (sortedBackends.length > 0) {
+    const optionsHtml = sortedBackends.map(b => {
+      const icon = b.installed ? '✓' : '✗';
+      const disabled = b.installed ? '' : ' disabled';
+      const selected = b.id === formData.backend ? ' selected' : '';
+      return `<option value="${escapeAttr(b.id)}"${disabled}${selected}>${icon} ${escapeHtml(b.display_name)}</option>`;
+    }).join('');
+    backendSelector = `
+      <div class="wizard-field">
+        <label for="wizBackend">AI 后端</label>
+        <select id="wizBackend" class="wizard-select">${optionsHtml}</select>
+        <div class="wizard-field-error" id="wizBackendErr"></div>
+      </div>
+    `;
+  }
+
+  const beConfig = getBackendFormConfig(formData.backend);
+
   body.innerHTML = `
     <div class="wizard-config">
       <h2>API 配置</h2>
       <p class="wizard-config-subtitle">连接你的 AI 后端</p>
       <div class="wizard-form">
+        ${backendSelector}
         <div class="wizard-field">
-          <label for="wizApiKey">API Key</label>
+          <label for="wizApiKey">${escapeHtml(beConfig.apiKeyLabel)}</label>
           <div class="wizard-input-row">
             <input type="password" id="wizApiKey" value="${escapeAttr(formData.apiKey)}"
-                   placeholder="sk-ant-…" autocomplete="off" spellcheck="false">
+                   placeholder="${escapeAttr(beConfig.apiKeyPlaceholder)}" autocomplete="off" spellcheck="false">
             <button class="wizard-eye-btn" id="wizEyeBtn" title="显示/隐藏">👁</button>
           </div>
           <div class="wizard-field-error" id="wizApiKeyErr"></div>
@@ -259,18 +345,37 @@ function renderConfigForm(body, footer) {
         <div class="wizard-field">
           <label for="wizBaseUrl">Base URL</label>
           <input type="text" id="wizBaseUrl" value="${escapeAttr(formData.baseUrl)}"
-                 placeholder="https://api.anthropic.com" autocomplete="off" spellcheck="false">
+                 placeholder="${escapeAttr(beConfig.baseUrlDefault)}" autocomplete="off" spellcheck="false">
           <div class="wizard-field-error" id="wizBaseUrlErr"></div>
         </div>
         <div class="wizard-field">
           <label for="wizModel">Model</label>
           <input type="text" id="wizModel" value="${escapeAttr(formData.model)}"
-                 placeholder="claude-sonnet-4-6" autocomplete="off" spellcheck="false">
+                 placeholder="${escapeAttr(beConfig.modelDefault)}" autocomplete="off" spellcheck="false">
           <div class="wizard-field-error" id="wizModelErr"></div>
         </div>
       </div>
     </div>
   `;
+
+  // Backend selector change → update form labels and defaults
+  const backendSelect = document.getElementById('wizBackend');
+  if (backendSelect) {
+    backendSelect.addEventListener('change', () => {
+      const newBackend = backendSelect.value;
+      formData.backend = newBackend;
+      const newConfig = getBackendFormConfig(newBackend);
+      // Update placeholders and labels
+      const apiKeyInput = document.getElementById('wizApiKey');
+      const apiKeyLabel = body.querySelector('label[for="wizApiKey"]');
+      const baseUrlInput = document.getElementById('wizBaseUrl');
+      const modelInput = document.getElementById('wizModel');
+      if (apiKeyLabel) apiKeyLabel.textContent = newConfig.apiKeyLabel;
+      if (apiKeyInput) apiKeyInput.placeholder = newConfig.apiKeyPlaceholder;
+      if (baseUrlInput && !formData.baseUrl) baseUrlInput.placeholder = newConfig.baseUrlDefault;
+      if (modelInput && !formData.model) modelInput.placeholder = newConfig.modelDefault;
+    });
+  }
 
   // Eye toggle
   document.getElementById('wizEyeBtn')?.addEventListener('click', () => {
@@ -311,6 +416,15 @@ function validateForm() {
   const apiKey = formData.apiKey.trim();
   const baseUrl = formData.baseUrl.trim();
   const model = formData.model.trim();
+  const backend = formData.backend;
+
+  // Backend must be installed
+  const beInfo = backends.find(b => b.id === backend);
+  if (beInfo && !beInfo.installed) {
+    const beErr = document.getElementById('wizBackendErr');
+    if (beErr) beErr.textContent = '请选择一个已安装的后端';
+    valid = false;
+  }
 
   // API Key
   const keyErr = document.getElementById('wizApiKeyErr');
@@ -372,7 +486,10 @@ async function doSave() {
       apiKey: formData.apiKey.trim(),
       baseUrl: formData.baseUrl.trim(),
       model: formData.model.trim(),
+      backend: formData.backend,
     });
+    // Clear credential from JS memory after successful save
+    formData.apiKey = '';
     transition(S.DONE);
   } catch (e) {
     console.warn('[wizard] save failed:', e);
@@ -383,12 +500,18 @@ async function doSave() {
 // ── Step 3: 完成 ────────────────────────────────────────────────────
 
 function renderDone(body, footer) {
+  const beConfig = getBackendFormConfig(formData.backend);
+  const beInfo = backends.find(b => b.id === formData.backend);
+  const beDisplayName = beInfo ? beInfo.display_name : formData.backend;
+
   body.innerHTML = `
     <div class="wizard-done">
       <div class="wizard-done-icon">✓</div>
       <h2>配置完成</h2>
       <p>OneCode 已就绪，终端加载中…</p>
       <div class="wizard-done-summary">
+        <span>后端: ${escapeHtml(beDisplayName)}</span>
+        <span>·</span>
         <span>API: ${formData.baseUrl.includes('anthropic') ? 'Anthropic' : 'Custom'}</span>
         <span>·</span>
         <span>Model: ${escapeHtml(formData.model.trim())}</span>

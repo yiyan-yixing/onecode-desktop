@@ -1,5 +1,8 @@
 //! OneCode Desktop 应用入口：模块声明 + Tauri Builder。
 
+mod macros;
+
+mod backend;
 mod cc_sessions;
 mod cc_status;
 mod commands;
@@ -95,6 +98,7 @@ pub fn run() {
             commands::pty_list,
             commands::pty_rename,
             commands::pty_replay,
+            commands::pty_set_active,
             commands::session_save,
             commands::session_restore,
             commands::session_persist,
@@ -113,6 +117,7 @@ pub fn run() {
             wizard::check_environment,
             wizard::is_first_run,
             wizard::save_wizard_config,
+            backend::list_backends,
         ])
         .run(tauri::generate_context!())
         .expect("failed to run OneCode Desktop");

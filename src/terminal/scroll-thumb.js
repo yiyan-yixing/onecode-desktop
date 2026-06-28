@@ -46,8 +46,10 @@ export class ScrollThumb {
     // xterm event listeners (onResize/onScroll return disposable handles)
     this._resizeDisposable = term.onResize(() => setTimeout(() => this.update(), 200));
     this._scrollDisposable = term.onScroll(() => {
-      // 节流：避免高频 scroll 事件导致 DOM 回流 → ResizeObserver 循环
-      if (!this._scrollRaf) {
+      // 节流：rAF 合并 + 时间门控（最低 16ms 间隔 ≈ 60fps）
+      const now = Date.now();
+      if (!this._scrollRaf && (now - (this._lastScrollUpdate || 0)) >= 16) {
+        this._lastScrollUpdate = now;
         this._scrollRaf = requestAnimationFrame(() => {
           this._scrollRaf = null;
           this.update();
@@ -60,6 +62,7 @@ export class ScrollThumb {
   dispose() {
     // Clear pending timers
     clearTimeout(this.hideTimer);
+    clearTimeout(this._elHTimer);
     if (this._scrollRaf) {
       cancelAnimationFrame(this._scrollRaf);
       this._scrollRaf = null;
@@ -93,7 +96,13 @@ export class ScrollThumb {
       return;
     }
     const ratio = viewH / total;
-    const elH = this.termEl.clientHeight;
+    // 缓存 elH — 避免每次 scroll 读取 clientHeight 触发强制回流
+    if (!this._cachedElH || !this._elHTimer) {
+      this._cachedElH = this.termEl.clientHeight;
+      clearTimeout(this._elHTimer);
+      this._elHTimer = setTimeout(() => { this._cachedElH = 0; this._elHTimer = null; }, 2000);
+    }
+    const elH = this._cachedElH;
     const thH = Math.max(24, Math.min(elH * 0.5, elH * ratio));
     const thTop = (viewY / (total - viewH)) * (elH - thH);
     this.thumb.style.height = thH + 'px';

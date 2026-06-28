@@ -42,7 +42,6 @@ echo "✓ xterm.css"
 # ── addons ──
 cp_if "$SRC/@xterm/addon-fit/lib/addon-fit.js" "$DST/addon-fit.min.js"
 cp_if "$SRC/@xterm/addon-web-links/lib/addon-web-links.js" "$DST/addon-web-links.min.js"
-cp_if "$SRC/@xterm/addon-webgl/lib/addon-webgl.js" "$DST/addon-webgl.min.js"
 
 # ── markdown / 代码高亮（Preview 模块用，M2+） ──
 sed '/\/\/# sourceMappingURL=/d' "$SRC/marked/marked.min.js" > "$DST/marked.min.js"
@@ -71,6 +70,9 @@ fi
 
 # 清理上次拷贝遗留的 .map 文件（不再需要）
 find "$DST" -name '*.map' -delete 2>/dev/null && echo "✓ 已清理 .map 文件"
+
+# 清理遗留的 addon-webgl.min.js（不再使用 WebGL 渲染器）
+rm -f "$DST/addon-webgl.min.js" && echo "✓ 已清理 addon-webgl.min.js"
 
 COUNT=$(find "$DST" -type f | wc -l | tr -d ' ')
 echo "→ 完成：$COUNT 个文件已同步到 src/static/"

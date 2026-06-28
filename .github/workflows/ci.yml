@@ -49,6 +49,13 @@ jobs:
         working-directory: src-tauri
         run: cargo clippy --all-targets -- -D warnings
 
+      - name: cargo test
+        working-directory: src-tauri
+        run: cargo test
+
+      - name: npm test
+        run: npm test
+
       - name: Frontend syntax check
         shell: bash
         run: |

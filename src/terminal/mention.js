@@ -23,6 +23,7 @@ export class MentionController {
     this.active = false;
     this.prefix = '';
     this.idx = -1;
+    this._isPasting = false; // 粘贴中不触发 mention
 
     // Store listener references for cleanup in dispose()
     this._onDataDisposable = term.onData((d) => this._onInput(d));
@@ -39,11 +40,18 @@ export class MentionController {
     if (this._onFocusOut) this.termEl.removeEventListener('focusout', this._onFocusOut);
   }
 
+  /** 标记粘贴开始/结束 — 粘贴期间不触发 mention 弹窗。 */
+  setPasting(v) {
+    this._isPasting = v;
+    if (v) this.hide(); // 粘贴开始时关闭已打开的弹窗
+  }
+
   /** 用户输入流。逐字符识别 @ 触发 / 累积前缀 / 非词字符收尾。 */
   _onInput(data) {
     for (const ch of data) {
       if (!this.active) {
-        if (ch === '@') {
+        // ★ 粘贴期间不触发 mention（防止粘贴含 @ 文本时弹窗闪烁）
+        if (ch === '@' && !this._isPasting) {
           this.active = true;
           this.prefix = '';
           this._render();
@@ -59,10 +67,11 @@ export class MentionController {
     }
   }
 
-  /** 捕获阶段拦截导航键（弹窗可见时）。 */
+  /** 捕获阶段拦截导航键（弹窗可见且有匹配项时）。 */
   _onKeyDown(e) {
     if (!this.active || !this.popEl || !this.popEl.classList.contains('on')) return;
     const items = this.popEl.querySelectorAll('.mp-item');
+    // ★ 修复: 只在有可见列表项时才拦截导航键，避免 Tab 等键被误吞
     if (!items.length) return;
     if (e.key === 'ArrowDown') {
       e.preventDefault(); e.stopPropagation();
@@ -73,6 +82,7 @@ export class MentionController {
       this.idx = Math.max(this.idx - 1, 0);
       this._markSel(items);
     } else if (e.key === 'Enter' || e.key === 'Tab') {
+      // ★ 修复: Tab/Enter 只在有选中项时拦截，否则放行到 PTY
       const target = this.idx >= 0 ? items[this.idx] : items[0];
       if (target) {
         e.preventDefault(); e.stopPropagation();
@@ -80,7 +90,11 @@ export class MentionController {
       }
     } else if (e.key === 'Escape') {
       e.preventDefault(); e.stopPropagation();
+      // ★ 修复: Escape 取消时，发 N 个 backspace 清除已发 PTY 的 @prefix
+      // 否则 @prefix 残留在命令行中，后续 shell 补全等操作受干扰
+      const n = this.prefix.length + 1; // N 含 '@'
       this.hide();
+      if (n > 0) this.sendInput(BACKSPACE.repeat(n));
     }
   }
 
@@ -103,6 +117,7 @@ export class MentionController {
     this.idx = 0; // 预选第一项（Enter 直接选中）
     this.popEl.innerHTML = matches.map((a, i) => this._itemHtml(a, i)).join('');
     this.popEl.classList.add('on');
+    this._positionAtCursor();
     const items = this.popEl.querySelectorAll('.mp-item');
     this._markSel(items);
     items.forEach((el) => {
@@ -115,6 +130,56 @@ export class MentionController {
         this._select(el);
       });
     });
+  }
+
+  /** 根据 xterm 光标位置定位弹窗（靠近光标，自动翻转避免溢出）。 */
+  _positionAtCursor() {
+    const pop = this.popEl;
+    if (!pop || !this.termEl) return;
+
+    // 1. 计算光标在 terminal 元素内的像素坐标
+    const screen = this.term.element?.querySelector('.xterm-screen');
+    if (!screen) return;
+    const screenRect = screen.getBoundingClientRect();
+
+    // 用 xterm 公开 API 获取光标行列
+    const buf = this.term.buffer?.active;
+    if (!buf) return;
+    const cursorCol = buf.cursorX ?? 0;
+    const cursorRow = buf.cursorY ?? 0;
+
+    // 每格像素尺寸（通过 screen 尺寸 / cols,rows 近似计算）
+    const cellW = screenRect.width / (this.term.cols || 80);
+    const cellH = screenRect.height / (this.term.rows || 24);
+
+    // 光标像素位置（相对于 xterm-screen）
+    const cursorPxX = cursorCol * cellW;
+    const cursorPxY = (cursorRow + 1) * cellH; // 光标行下方
+
+    // 2. 转换到 mentionPortal 的定位参考系（.app）
+    const appEl = document.getElementById('app');
+    if (!appEl) return;
+    const appRect = appEl.getBoundingClientRect();
+
+    const popLeft = screenRect.left - appRect.left + cursorPxX;
+    const popTop  = screenRect.top  - appRect.top  + cursorPxY;
+
+    // 3. 溢出检测 & 翻转
+    const popW = 320; // CSS width
+    const popH = pop.offsetHeight || 200; // 渲染后高度
+
+    // 右侧溢出：向左偏移
+    const left = (popLeft + popW > appRect.width)
+      ? Math.max(0, appRect.width - popW - 8)
+      : popLeft;
+
+    // 底部溢出：翻到光标上方
+    const top = (popTop + popH > appRect.height)
+      ? Math.max(0, screenRect.top - appRect.top + cursorRow * cellH - popH)
+      : popTop;
+
+    pop.style.left = left + 'px';
+    pop.style.top  = top + 'px';
   }
 
   _itemHtml(a, i) {
@@ -132,7 +197,10 @@ export class MentionController {
   }
 
   _markSel(items) {
-    items.forEach((el, i) => el.classList.toggle('sel', i === this.idx));
+    if (!items) {
+      items = this.popEl?.querySelectorAll('.mp-item');
+    }
+    if (items) items.forEach((el, i) => el.classList.toggle('sel', i === this.idx));
   }
 
   _select(el) {

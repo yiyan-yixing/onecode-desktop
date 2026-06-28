@@ -11,12 +11,14 @@
 
 use std::collections::HashMap;
 use std::io::Write;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Mutex;
 use std::time::Instant;
 
 use portable_pty::{ChildKiller, MasterPty, PtySize};
 use uuid::Uuid;
+
+use crate::recover_lock;
 
 /// 10MB ring buffer per slot（对齐 pty.js MAX_BUFFER_SIZE）
 #[allow(dead_code)]
@@ -139,15 +141,24 @@ pub struct TerminalSlot {
     pub args: Vec<String>,
     pub cwd: String,
     pub env: HashMap<String, String>,
+    /// 后端内核标识（"claude-code" / "opencode" / "codex" 等）
+    pub backend: String,
     pub status: Mutex<SlotStatus>,
     pub exit_code: Mutex<Option<i32>>,
     pub pid: Mutex<Option<u32>>,
     pub created_at: chrono::DateTime<chrono::Utc>,
+    /// 上次切换到该终端的时间（session 恢复时用于定位上次活跃项目）
+    pub last_active_at: Mutex<String>,
     pub spawned_at: Mutex<Option<Instant>>,
     pub restart_count: Mutex<u32>,
 
     /// 用户主动关闭/重启标记。
     pub closed: AtomicBool,
+
+    /// generation 计数器 — 每次 spawn/restart 递增。
+    /// wait 线程记录自己启动时的 generation，仅在 generation 匹配时写入状态/自动重启。
+    /// 消除 restart() 中的 sleep 竞态。
+    pub generation: AtomicU32,
 
     ring_buffer: Mutex<RingBuffer>,
     pty_master: Mutex<Option<Box<dyn MasterPty + Send>>>,
@@ -157,6 +168,7 @@ pub struct TerminalSlot {
 }
 
 impl TerminalSlot {
+#[allow(clippy::too_many_arguments)]
     pub fn new(
         id: Uuid,
         label: String,
@@ -165,6 +177,7 @@ impl TerminalSlot {
         args: Vec<String>,
         cwd: String,
         env: HashMap<String, String>,
+        backend: String,
         ring_buffer_max: usize,
     ) -> Self {
         Self {
@@ -175,13 +188,16 @@ impl TerminalSlot {
             args,
             cwd,
             env,
+            backend,
             status: Mutex::new(SlotStatus::Running),
             exit_code: Mutex::new(None),
             pid: Mutex::new(None),
             created_at: chrono::Utc::now(),
+            last_active_at: Mutex::new(String::new()),
             spawned_at: Mutex::new(None),
             restart_count: Mutex::new(0),
             closed: AtomicBool::new(false),
+            generation: AtomicU32::new(0),
             ring_buffer: Mutex::new(RingBuffer::new(ring_buffer_max)),
             pty_master: Mutex::new(None),
             pty_writer: Mutex::new(None),
@@ -190,18 +206,25 @@ impl TerminalSlot {
     }
 
     /// 写入用户输入到 PTY（读锁级别即可，不修改结构）。
+    /// 若 pty_writer 为 None（中毒恢复后或 slot 未就绪），返回 NotConnected 错误。
     pub fn write(&self, data: &[u8]) -> std::io::Result<()> {
-        let mut writer = self.pty_writer.lock().expect("pty_writer poisoned");
-        if let Some(w) = writer.as_mut() {
-            w.write_all(data)?;
-            w.flush()?;
+        let mut writer = recover_lock!(self.pty_writer.lock(), "pty_writer");
+        match writer.as_mut() {
+            Some(w) => {
+                w.write_all(data)?;
+                w.flush()?;
+                Ok(())
+            }
+            None => Err(std::io::Error::new(
+                std::io::ErrorKind::NotConnected,
+                "pty writer not available (slot may have crashed)",
+            )),
         }
-        Ok(())
     }
 
     /// 调整 PTY 大小。
     pub fn resize(&self, cols: u16, rows: u16) -> std::io::Result<()> {
-        let master = self.pty_master.lock().expect("pty_master poisoned");
+        let master = recover_lock!(self.pty_master.lock(), "pty_master");
         if let Some(m) = master.as_ref() {
             m.resize(PtySize {
                 rows,
@@ -214,9 +237,15 @@ impl TerminalSlot {
         Ok(())
     }
 
+    /// 获取 PTY 当前尺寸（用于重启时保留终端大小）。
+    pub fn get_size(&self) -> Option<PtySize> {
+        let master = recover_lock!(self.pty_master.lock(), "pty_master");
+        master.as_ref().and_then(|m| m.get_size().ok())
+    }
+
     /// 终止子进程（SIGTERM 由 portable-pty 处理）。
     pub fn kill(&self) -> std::io::Result<()> {
-        let mut killer = self.child_killer.lock().expect("child_killer poisoned");
+        let mut killer = recover_lock!(self.child_killer.lock(), "child_killer");
         if let Some(k) = killer.as_mut() {
             k.kill().map_err(|e| std::io::Error::other(e.to_string()))?;
         }
@@ -225,41 +254,38 @@ impl TerminalSlot {
 
     /// 取回放缓冲（Tab 切换时前端调用）。
     pub fn replay(&self) -> Vec<u8> {
-        self.ring_buffer
-            .lock()
-            .expect("ring_buffer poisoned")
-            .replay()
+        recover_lock!(self.ring_buffer.lock(), "ring_buffer").replay()
     }
 
     pub fn clear_buffer(&self) {
-        self.ring_buffer
-            .lock()
-            .expect("ring_buffer poisoned")
-            .clear();
+        recover_lock!(self.ring_buffer.lock(), "ring_buffer").clear();
     }
 
     /// 写入 PTY 输出到 ring buffer（batcher 任务调用）。
     pub fn push_output(&self, data: Vec<u8>) {
-        self.ring_buffer
-            .lock()
-            .expect("ring_buffer poisoned")
-            .push(data);
+        recover_lock!(self.ring_buffer.lock(), "ring_buffer").push(data);
     }
 
     pub fn rename(&self, label: String) {
-        *self.label.lock().expect("label poisoned") = label;
+        *recover_lock!(self.label.lock(), "label") = label;
+    }
+
+    /// 标记此终端为当前活跃（前端 switchTo 时调用）。
+    /// 时间戳写入 last_active_at，供 session 恢复时定位上次使用的终端。
+    pub fn touch_active(&self) {
+        *recover_lock!(self.last_active_at.lock(), "last_active_at") = chrono::Utc::now().to_rfc3339();
     }
 
     pub fn label(&self) -> String {
-        self.label.lock().expect("label poisoned").clone()
+        recover_lock!(self.label.lock(), "label").clone()
     }
 
     pub fn status(&self) -> SlotStatus {
-        *self.status.lock().expect("status poisoned")
+        *recover_lock!(self.status.lock(), "status")
     }
 
     pub fn set_status(&self, s: SlotStatus) {
-        *self.status.lock().expect("status poisoned") = s;
+        *recover_lock!(self.status.lock(), "status") = s;
     }
 
     /// 标记为用户主动关闭/重启，wait 线程据此退出且不自动重启。
@@ -271,14 +297,24 @@ impl TerminalSlot {
         self.closed.load(Ordering::SeqCst)
     }
 
+    /// 递增 generation，返回新值。用于 spawn/restart 时标记"这是新一代"。
+    pub fn bump_generation(&self) -> u32 {
+        self.generation.fetch_add(1, Ordering::SeqCst) + 1
+    }
+
+    /// 读取当前 generation。
+    pub fn current_generation(&self) -> u32 {
+        self.generation.load(Ordering::SeqCst)
+    }
+
     pub fn inc_restart(&self) -> u32 {
-        let mut c = self.restart_count.lock().expect("restart_count poisoned");
+        let mut c = recover_lock!(self.restart_count.lock(), "restart_count");
         *c += 1;
         *c
     }
 
     pub fn reset_restart(&self) {
-        *self.restart_count.lock().expect("restart_count poisoned") = 0;
+        *recover_lock!(self.restart_count.lock(), "restart_count") = 0;
     }
 
     /// 替换 PTY 句柄（自动重启 / 手动 restart 时复用）。
@@ -296,11 +332,11 @@ impl TerminalSlot {
                 e
             })
             .ok();
-        *self.pty_master.lock().expect("pty_master poisoned") = Some(master);
-        *self.pty_writer.lock().expect("pty_writer poisoned") = writer;
-        *self.child_killer.lock().expect("child_killer poisoned") = Some(killer);
-        *self.pid.lock().expect("pid poisoned") = pid;
-        *self.spawned_at.lock().expect("spawned_at poisoned") = Some(Instant::now());
+        *recover_lock!(self.pty_master.lock(), "pty_master") = Some(master);
+        *recover_lock!(self.pty_writer.lock(), "pty_writer") = writer;
+        *recover_lock!(self.child_killer.lock(), "child_killer") = Some(killer);
+        *recover_lock!(self.pid.lock(), "pid") = pid;
+        *recover_lock!(self.spawned_at.lock(), "spawned_at") = Some(Instant::now());
     }
 }
 

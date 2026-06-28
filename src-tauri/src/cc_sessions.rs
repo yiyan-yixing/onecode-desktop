@@ -14,6 +14,8 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
+use crate::recover_lock;
+
 const TTL: Duration = Duration::from_secs(5);
 
 #[derive(serde::Serialize, Clone)]
@@ -47,7 +49,7 @@ impl CcSessionsCache {
     pub fn load(&self, project_dir: Option<&str>) -> Vec<CcSession> {
         let now = Instant::now();
         {
-            let guard = self.slot.lock().expect("cc sessions cache poisoned");
+            let guard = recover_lock!(self.slot.lock(), "cc_sessions_cache");
             if let Some((ts, sessions)) = guard.as_ref() {
                 if now.duration_since(*ts) < TTL {
                     // If project_dir filter is requested, filter cached results
@@ -65,7 +67,7 @@ impl CcSessionsCache {
         // miss / expired → recompute
         let sessions = compute_sessions(&self.global_dir);
         {
-            let mut guard = self.slot.lock().expect("cc sessions cache poisoned");
+            let mut guard = recover_lock!(self.slot.lock(), "cc_sessions_cache");
             *guard = Some((now, sessions.clone()));
         }
         if let Some(pd) = project_dir {
@@ -76,8 +78,7 @@ impl CcSessionsCache {
 
     #[allow(dead_code)]
     pub fn invalidate(&self) {
-        let mut guard = self.slot.lock().expect("cc sessions cache poisoned");
-        *guard = None;
+        *recover_lock!(self.slot.lock(), "cc_sessions_cache") = None;
     }
 }
 
@@ -113,7 +114,7 @@ fn compute_sessions(global_dir: &Path) -> Vec<CcSession> {
             let cwd_basename = info
                 .cwd
                 .split('/')
-                .last()
+                .next_back()
                 .unwrap_or(&info.cwd)
                 .to_string();
 
@@ -182,7 +183,7 @@ fn compute_sessions(global_dir: &Path) -> Vec<CcSession> {
     }
 
     // 5. Sort by updated_at descending
-    sessions.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    sessions.sort_by_key(|b| std::cmp::Reverse(b.updated_at));
     sessions
 }
 
@@ -293,7 +294,7 @@ fn scan_project_transcripts(
     let decoded_cwd = decode_project_dir(project_dir_name);
     let cwd_basename = decoded_cwd
         .split('/')
-        .last()
+        .next_back()
         .unwrap_or("")
         .to_string();
 
@@ -458,8 +459,8 @@ fn parse_transcript_header(path: &Path) -> (String, String, i64) {
 /// Decode project directory name back to absolute path.
 /// `-Users-zhanglei-foo` → `/Users/zhanglei/foo`
 fn decode_project_dir(name: &str) -> String {
-    if name.starts_with('-') {
-        let path: String = name[1..].replace('-', "/");
+    if let Some(stripped) = name.strip_prefix('-') {
+        let path: String = stripped.replace('-', "/");
         format!("/{}", path)
     } else {
         name.to_string()

@@ -33,6 +33,9 @@ pub struct AppConfig {
     /// Setup Wizard 是否已完成
     #[serde(default)]
     pub wizard_completed: bool,
+    /// 默认后端内核（"claude-code" / "opencode" / "codex" 等）
+    #[serde(default = "default_backend")]
+    pub default_backend: String,
 }
 
 fn default_base_url() -> String {
@@ -41,6 +44,10 @@ fn default_base_url() -> String {
 
 fn default_model() -> String {
     "claude-sonnet-4-6".to_string()
+}
+
+fn default_backend() -> String {
+    "claude-code".to_string()
 }
 
 impl Default for AppConfig {
@@ -63,6 +70,7 @@ impl Default for AppConfig {
             base_url: default_base_url(),
             model: default_model(),
             wizard_completed: false,
+            default_backend: default_backend(),
         }
     }
 }
@@ -143,6 +151,7 @@ pub struct ConfigUpdate {
     pub base_url: Option<String>,
     pub model: Option<String>,
     pub wizard_completed: Option<bool>,
+    pub default_backend: Option<String>,
 }
 
 impl ConfigUpdate {
@@ -174,6 +183,9 @@ impl ConfigUpdate {
         }
         if let Some(v) = &self.wizard_completed {
             cfg.wizard_completed = *v;
+        }
+        if let Some(v) = &self.default_backend {
+            cfg.default_backend = v.clone();
         }
     }
 }

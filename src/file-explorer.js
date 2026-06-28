@@ -94,15 +94,22 @@ function renderIcon(entry) {
   return `<span class="fe-badge" style="background:${color}18;color:${color};border:1px solid ${color}30">${esc(label)}</span>`;
 }
 
-/** HTML 安全过滤（移植自 onecode.html） */
+/** HTML 安全过滤 — expanded to cover single-quoted, unquoted event handlers,
+ *  SVG/math tags, and javascript: URIs (mitigation, not full DOMPurify replacement). */
 function sanitizeHtml(html) {
   return html
+    // Remove dangerous tags
     .replace(/<script[\s\S]*?<\/script>/gi, '')
-    .replace(/ on\w+="[^"]*"/gi, '')
+    .replace(/<svg[\s\S]*?<\/svg>/gi, '')
+    .replace(/<math[\s\S]*?<\/math>/gi, '')
     .replace(/<iframe[\s\S]*?<\/iframe>/gi, '')
     .replace(/<object[\s\S]*?<\/object>/gi, '')
     .replace(/<embed[^>]*>/gi, '')
-    .replace(/<form[\s\S]*?<\/form>/gi, '');
+    .replace(/<form[\s\S]*?<\/form>/gi, '')
+    // Remove all on* event handlers (double-quoted, single-quoted, or unquoted)
+    .replace(/\s+on\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]*)/gi, '')
+    // Remove javascript: / vbscript: / data:text/html URIs in href/src/action
+    .replace(/(href|src|action|formaction)\s*=\s*(?:"(?:javascript|vbscript|data:text\/html)[^"]*"|'(?:javascript|vbscript|data:text\/html)[^']*')/gi, '');
 }
 
 /** hljs 高亮代码 */
@@ -425,7 +432,8 @@ export class FileExplorerController {
 
       case 'pdf': {
         if (content.data_base64) {
-          body.innerHTML = `<iframe class="fe-pdf-view" src="data:application/pdf;base64,${content.data_base64}"></iframe>`;
+          // sandbox="allow-same-origin" prevents embedded JS execution
+          body.innerHTML = `<iframe class="fe-pdf-view" sandbox="allow-same-origin" src="data:application/pdf;base64,${content.data_base64}"></iframe>`;
         } else {
           body.innerHTML = `<div class="fe-bin"><p>${esc(content.name)}</p><p>PDF 过大 (${fmtSize(content.size)})，无法预览</p></div>`;
         }
@@ -463,8 +471,11 @@ export class FileExplorerController {
         if (cwd) this.navigate(cwd);
       }
       // 启动自动刷新（每 15 秒）
+      // P1-20: Skip IPC refresh when sidebar is collapsed
       this._stopRefresh();
       this._refreshTimer = setInterval(() => {
+        const sidebar = document.getElementById('orbital');
+        if (sidebar && sidebar.classList.contains('collapsed')) return;
         if (this._currentPath) this.refresh();
       }, 15000);
     } else {

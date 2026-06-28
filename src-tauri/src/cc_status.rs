@@ -20,6 +20,8 @@ use std::time::{Duration, Instant};
 use chrono::{Datelike, Timelike};
 use serde_json::Value;
 
+use crate::recover_lock;
+
 const TTL: Duration = Duration::from_secs(5);
 
 #[derive(serde::Serialize, Clone, Default)]
@@ -101,7 +103,7 @@ impl CcStatusCache {
             .unwrap_or_default();
         let now = Instant::now();
         {
-            let guard = self.slot.lock().expect("cc cache poisoned");
+            let guard = recover_lock!(self.slot.lock(), "cc_status_cache");
             if let Some((ts, map)) = guard.as_ref() {
                 if now.duration_since(*ts) < TTL {
                     if let Some(v) = map.get(&key) {
@@ -112,7 +114,7 @@ impl CcStatusCache {
         }
         // miss / 过期 → 重算
         let status = load_cc_status(&self.global_dir, project_dir);
-        let mut guard = self.slot.lock().expect("cc cache poisoned");
+        let mut guard = recover_lock!(self.slot.lock(), "cc_status_cache");
         let entry = guard.get_or_insert_with(|| (now, HashMap::new()));
         entry.0 = now;
         entry.1.insert(key, status.clone());
@@ -121,7 +123,7 @@ impl CcStatusCache {
 
     /// 强制清空缓存（前端「刷新」用）。
     pub fn invalidate(&self) {
-        *self.slot.lock().expect("cc cache poisoned") = None;
+        *recover_lock!(self.slot.lock(), "cc_status_cache") = None;
     }
 }
 

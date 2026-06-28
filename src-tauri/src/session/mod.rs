@@ -24,7 +24,9 @@ pub struct PersistentSlot {
     pub args: Vec<String>,
     pub cwd: String,
     pub env: std::collections::HashMap<String, String>,
+    pub backend: String,
     pub created_at: String,
+    pub last_active_at: String,
 }
 
 pub struct SessionStore {
@@ -50,6 +52,34 @@ impl SessionStore {
             conn.execute_batch("ALTER TABLE terminals ADD COLUMN project_id TEXT")?;
             log::info!("[session] migrated: added project_id column");
         }
+        // Migration: add backend column if missing
+        let has_backend: bool = {
+            let mut stmt = conn.prepare("PRAGMA table_info(terminals)")?;
+            let rows: Vec<String> = stmt
+                .query_map([], |row| row.get::<_, String>(1))?
+                .filter_map(|r| r.ok())
+                .collect();
+            rows.iter().any(|c| c == "backend")
+        };
+        if !has_backend {
+            conn.execute_batch(
+                "ALTER TABLE terminals ADD COLUMN backend TEXT NOT NULL DEFAULT 'claude-code'",
+            )?;
+            log::info!("[session] migrated: added backend column");
+        }
+        // Migration: add last_active_at column if missing
+        let has_last_active_at: bool = {
+            let mut stmt = conn.prepare("PRAGMA table_info(terminals)")?;
+            let rows: Vec<String> = stmt
+                .query_map([], |row| row.get::<_, String>(1))?
+                .filter_map(|r| r.ok())
+                .collect();
+            rows.iter().any(|c| c == "last_active_at")
+        };
+        if !has_last_active_at {
+            conn.execute_batch("ALTER TABLE terminals ADD COLUMN last_active_at TEXT NOT NULL DEFAULT ''")?;
+            log::info!("[session] migrated: added last_active_at column");
+        }
         Ok(Self {
             db: Arc::new(Mutex::new(conn)),
         })
@@ -57,11 +87,13 @@ impl SessionStore {
 
     pub async fn save_all(&self, slots: &[PersistentSlot]) -> Result<()> {
         let db = self.db.lock().await;
+        db.execute_batch("BEGIN")?;
+        // 即使后续 INSERT 失败，DELETE 也可回滚
         db.execute("DELETE FROM terminals", [])?;
         for s in slots {
             db.execute(
-                "INSERT INTO terminals (id, label, project_id, cmd, args, cwd, env, created_at) \
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+                "INSERT INTO terminals (id, label, project_id, cmd, args, cwd, env, backend, created_at, last_active_at) \
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
                 rusqlite::params![
                     s.id,
                     s.label,
@@ -70,17 +102,20 @@ impl SessionStore {
                     serde_json::to_string(&s.args)?,
                     s.cwd,
                     serde_json::to_string(&s.env)?,
+                    s.backend,
                     s.created_at,
+                    s.last_active_at,
                 ],
             )?;
         }
+        db.execute_batch("COMMIT")?;
         Ok(())
     }
 
     pub async fn load_all(&self) -> Result<Vec<PersistentSlot>> {
         let db = self.db.lock().await;
         let mut stmt = db.prepare(
-            "SELECT id, label, project_id, cmd, args, cwd, env, created_at \
+            "SELECT id, label, project_id, cmd, args, cwd, env, backend, created_at, last_active_at \
              FROM terminals ORDER BY created_at",
         )?;
         let rows = stmt.query_map([], |row| {
@@ -94,7 +129,9 @@ impl SessionStore {
                 args: serde_json::from_str(&args_json).unwrap_or_default(),
                 cwd: row.get(5)?,
                 env: serde_json::from_str(&env_json).unwrap_or_default(),
-                created_at: row.get(7)?,
+                backend: row.get::<_, Option<String>>(7)?.unwrap_or_else(|| "claude-code".to_string()),
+                created_at: row.get(8)?,
+                last_active_at: row.get::<_, Option<String>>(9)?.unwrap_or_default(),
             })
         })?;
         let mut out = Vec::new();

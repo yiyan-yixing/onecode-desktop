@@ -26,9 +26,31 @@ jobs:
       - name: Build bundle
         run: npm run build
 
-      # TODO: Apple code signing — 需配置 APPLE_CERTIFICATE 等 secrets
+      # TODO: Apple code signing + notarization — 需配置以下 secrets：
+      #   APPLE_CERTIFICATE_BASE64: Developer ID Application 证书 (p12, base64)
+      #   APPLE_CERTIFICATE_PASSWORD: 证书密码
+      #   APPLE_ID: Apple ID 邮箱
+      #   APPLE_TEAM_ID: Team ID
+      #   APPLE_APP_PASSWORD: App-specific password (appleid.apple.com)
+      #
+      # - name: Import certificate
+      #   uses: apple-actions/import-codesign-certs@v2
+      #   with:
+      #     p12-file-base64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+      #     p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      #
       # - name: Sign app
-      #   run: ...
+      #   run: |
+      #     APP_PATH="target/release/bundle/macos/OneCode Desktop.app"
+      #     codesign --force --deep --sign "Developer ID Application: ..." "$APP_PATH"
+      #
+      # - name: Notarize
+      #   run: |
+      #     xcrun notarytool submit "target/release/bundle/dmg/OneCode Desktop_${{ steps.version.outputs.version }}_aarch64.dmg" \
+      #       --apple-id "${{ secrets.APPLE_ID }}" \
+      #       --team-id "${{ secrets.APPLE_TEAM_ID }}" \
+      #       --password "${{ secrets.APPLE_APP_PASSWORD }}" \
+      #       --wait
 
       - name: Get version
         id: version

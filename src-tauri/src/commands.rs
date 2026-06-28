@@ -32,38 +32,52 @@ fn parse_id(s: &str) -> Result<uuid::Uuid, String> {
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn pty_spawn(
+    backend: Option<String>,
     cmd: Option<String>,
     args: Option<Vec<String>>,
     cwd: Option<String>,
     env: Option<HashMap<String, String>>,
     label: Option<String>,
     project_id: Option<String>,
+    cols: Option<u16>,
+    rows: Option<u16>,
     data_channel: Channel<Vec<u8>>,
     state: State<'_, MultiPtyManager>,
     config: State<'_, Arc<AppConfig>>,
 ) -> Result<SpawnResult, String> {
-    let cmd = cmd.unwrap_or_else(|| config.default_cmd.clone());
-    let args = args.unwrap_or_else(|| config.default_args.clone());
+    // 根据后端 profile 解析默认命令/参数/环境变量
+    let effective_backend = backend.as_deref().unwrap_or(&config.default_backend);
+    let profile = crate::backend::resolve_or_default(effective_backend);
+
+    let cmd = cmd.unwrap_or_else(|| profile.cmd.to_string());
+    let args = args.unwrap_or_else(|| {
+        profile.default_args.iter().map(|s| s.to_string()).collect()
+    });
     let cwd = {
         let c = cwd.unwrap_or_else(|| config.default_cwd.clone());
         // 确保默认工作目录存在
         std::fs::create_dir_all(&c).ok();
         c
     };
-    // 合并配置中的 API 环境变量（Wizard 设置的 api_key/base_url/model）
+    // 根据 profile 的 env_key_map 注入环境变量
     let mut env = env.unwrap_or_default();
-    if !config.api_key.is_empty() {
-        env.insert("ANTHROPIC_API_KEY".to_string(), config.api_key.clone());
+    for (config_key, env_var) in profile.env_key_map {
+        match *config_key {
+            "api_key" if !config.api_key.is_empty() => {
+                env.insert(env_var.to_string(), config.api_key.clone());
+            }
+            "base_url" if !config.base_url.is_empty() => {
+                env.insert(env_var.to_string(), config.base_url.clone());
+            }
+            "model" if !config.model.is_empty() => {
+                env.insert(env_var.to_string(), config.model.clone());
+            }
+            _ => {}
+        }
     }
-    if !config.base_url.is_empty() {
-        env.insert("ANTHROPIC_BASE_URL".to_string(), config.base_url.clone());
-    }
-    if !config.model.is_empty() {
-        env.insert("ANTHROPIC_MODEL".to_string(), config.model.clone());
-    }
-    log::info!("[pty_spawn] cmd={cmd:?} args={args:?} cwd={cwd:?} project_id={project_id:?}");
+    log::info!("[pty_spawn] backend={effective_backend} cmd={cmd:?} args={args:?} cwd={cwd:?} project_id={project_id:?} cols={cols:?} rows={rows:?}");
     let (id, pid) = state
-        .spawn(cmd, args, cwd, env, data_channel, label, project_id)
+        .spawn(cmd, args, cwd, env, data_channel, label, project_id, effective_backend.to_string(), cols, rows)
         .await
         .map_err(|e| {
             log::error!("[pty_spawn] FAILED: {e}");
@@ -84,11 +98,13 @@ pub async fn pty_kill(id: String, state: State<'_, MultiPtyManager>) -> Result<(
 #[tauri::command]
 pub async fn pty_restart(
     id: String,
+    cols: Option<u16>,
+    rows: Option<u16>,
     data_channel: Channel<Vec<u8>>,
     state: State<'_, MultiPtyManager>,
 ) -> Result<(), String> {
     state
-        .restart(parse_id(&id)?, data_channel)
+        .restart(parse_id(&id)?, data_channel, cols, rows)
         .await
         .map_err(|e| e.to_string())
 }
@@ -145,6 +161,16 @@ pub async fn pty_replay(id: String, state: State<'_, MultiPtyManager>) -> Result
         .map_err(|e| e.to_string())
 }
 
+/// 标记指定终端为当前活跃（前端 switchTo 时调用）。
+/// 更新 last_active_at 时间戳，供 session 恢复时定位上次使用的终端。
+#[tauri::command]
+pub async fn pty_set_active(id: String, state: State<'_, MultiPtyManager>) -> Result<(), String> {
+    state
+        .set_active(parse_id(&id)?)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 // ── P1：会话持久化 ──────────────────────────────────────────────────
 
 #[tauri::command]
@@ -180,7 +206,9 @@ pub async fn session_persist(
             args: c.args,
             cwd: c.cwd,
             env: c.env,
+            backend: c.backend,
             created_at: c.created_at,
+            last_active_at: c.last_active_at,
         })
         .collect();
     let n = slots.len();
@@ -241,6 +269,8 @@ pub struct ProjectInfo {
     pub name: String,
     pub dir: String,
     pub description: String,
+    #[serde(default)]
+    pub backend: Option<String>,
 }
 
 /// 保存项目元数据到 ~/.onecode/projects/<id>.json。
@@ -297,6 +327,7 @@ pub async fn save_project(project: ProjectInfo) -> Result<String, String> {
         "name": project.name,
         "dir": project.dir,
         "description": project.description,
+        "backend": project.backend,
         "created_at": created_at,
         "updated_at": now,
     });
@@ -338,9 +369,9 @@ pub async fn list_projects() -> Result<Vec<serde_json::Value>, String> {
                 // Lazy migration: assign UUID if missing
                 if val.get("id").is_none() {
                     let id = uuid::Uuid::new_v4().to_string();
-                    val.as_object_mut().map(|o| {
+                    if let Some(o) = val.as_object_mut() {
                         o.insert("id".to_string(), serde_json::Value::String(id.clone()));
-                    });
+                    }
                     // Write back and rename to <id>.json
                     if let Ok(new_content) = serde_json::to_string_pretty(&val) {
                         let new_path = projects_dir.join(format!("{}.json", id));
@@ -354,24 +385,38 @@ pub async fn list_projects() -> Result<Vec<serde_json::Value>, String> {
             }
         }
     }
-    // Deduplicate by name — keep the latest (most recent updated_at), remove older duplicates
+    // Deduplicate by name AND by dir — keep the latest, remove older duplicates.
+    // Same-name or same-dir projects are considered duplicates (prevents
+    // two project cards pointing to the same directory from showing).
     {
-        let mut seen: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        let mut seen_name: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        let mut seen_dir: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
         for (i, p) in projects.iter().enumerate() {
+            let my_time = p.get("updated_at").and_then(|v| v.as_str()).unwrap_or("");
             if let Some(name) = p.get("name").and_then(|v| v.as_str()) {
-                let my_time = p.get("updated_at").and_then(|v| v.as_str()).unwrap_or("");
-                if let Some(&prev_i) = seen.get(name) {
+                if let Some(&prev_i) = seen_name.get(name) {
                     let prev_time = projects[prev_i].get("updated_at").and_then(|v| v.as_str()).unwrap_or("");
                     if my_time >= prev_time {
-                        seen.insert(name.to_string(), i);
+                        seen_name.insert(name.to_string(), i);
                     }
-                    // else keep prev_i
                 } else {
-                    seen.insert(name.to_string(), i);
+                    seen_name.insert(name.to_string(), i);
+                }
+            }
+            if let Some(dir) = p.get("dir").and_then(|v| v.as_str()) {
+                if !dir.is_empty() {
+                    if let Some(&prev_i) = seen_dir.get(dir) {
+                        let prev_time = projects[prev_i].get("updated_at").and_then(|v| v.as_str()).unwrap_or("");
+                        if my_time >= prev_time {
+                            seen_dir.insert(dir.to_string(), i);
+                        }
+                    } else {
+                        seen_dir.insert(dir.to_string(), i);
+                    }
                 }
             }
         }
-        let keep: std::collections::HashSet<usize> = seen.values().copied().collect();
+        let keep: std::collections::HashSet<usize> = seen_name.values().copied().chain(seen_dir.values().copied()).collect();
         // Remove orphaned JSON files for duplicate projects
         let remove_indices: Vec<usize> = (0..projects.len()).filter(|i| !keep.contains(i)).collect();
         for &i in &remove_indices {

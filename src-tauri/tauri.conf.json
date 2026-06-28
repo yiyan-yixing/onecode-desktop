@@ -22,12 +22,12 @@
         "transparent": false,
         "resizable": true,
         "fullscreen": false,
-        "devtools": true,
+        "devtools": false,
         "titleBarStyle": "Overlay"
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' https://api.anthropic.com https://api.openai.com; font-src 'self'"
     }
   },
   "bundle": {
@@ -41,7 +41,9 @@
       "icons/icon.png"
     ],
     "category": "DeveloperTool",
-    "shortDescription": "Multi-terminal AI desktop client",
-    "longDescription": "OneCode Desktop — manage multiple Claude Code terminals in one native window."
+    "publisher": "YiYan YiXing",
+    "copyright": "© 2025 YiYan YiXing. MIT License.",
+    "shortDescription": "Multi-kernel AI terminal manager",
+    "longDescription": "OneCode Desktop — manage multiple AI coding terminals (Claude Code, OpenCode, Codex, etc.) in one native window."
   }
 }

@@ -2,9 +2,10 @@
 //!
 //! 提供 fs_list_dir / fs_read_file 两个命令，供前端渲染文件树和预览面板。
 //! 安全作用域：仅允许 $HOME 子目录及活跃终端 cwd 路径。
+//! P1-17: 屏蔽敏感目录（.ssh/.gnupg/.kube 等），防止密钥泄露。
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
 // ── 数据结构 ──────────────────────────────────────────────────────
@@ -98,6 +99,18 @@ const CODE_NAMES: &[&str] = &[
     "Gemfile.lock", "Podfile", "Brewfile",
 ];
 
+/// P1-17: 敏感目录名（相对于 $HOME），禁止读取以防止密钥/凭证泄露。
+const SENSITIVE_DIR_NAMES: &[&str] = &[
+    ".ssh",       // SSH 私钥、authorized_keys、known_hosts
+    ".gnupg",     // GPG 私钥环
+    ".kube",      // Kubernetes 凭证/配置
+    ".aws",       // AWS 凭证 (~/.aws/credentials)
+    ".config/gcloud", // GCP 凭证
+    ".azure",     // Azure 凭证
+    ".pki",       // NSS/PKI 数据库（Firefox 等用）
+    "Application Data", // Windows 敏感数据（非当前平台但防御性保留）
+];
+
 // ── 文件类型检测 ──────────────────────────────────────────────────
 
 fn classify_file(name: &str) -> &'static str {
@@ -110,7 +123,7 @@ fn classify_file(name: &str) -> &'static str {
         if CODE_EXTS.contains(&ext) { return "code"; }
     }
     // 再检查完整文件名
-    if CODE_NAMES.iter().any(|n| name == *n) { return "code"; }
+    if CODE_NAMES.contains(&name) { return "code"; }
     "bin"
 }
 
@@ -124,13 +137,18 @@ fn home_dir() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-/// 验证路径在安全作用域内（$HOME 子目录）
+/// 验证路径在安全作用域内（$HOME 子目录），并拒绝敏感目录。
 fn validate_path(path: &str) -> Result<PathBuf, String> {
     let canonical = fs::canonicalize(path)
         .map_err(|e| format!("invalid path: {e}"))?;
 
     if let Some(home) = home_dir() {
         if canonical.starts_with(&home) {
+            // P1-17: 检查敏感目录。将 canonical 路径的子路径与 HOME 比较，
+            // 得到相对路径后检查是否匹配敏感目录名。
+            if is_sensitive_path(&canonical, &home) {
+                return Err("access denied: sensitive directory".to_string());
+            }
             return Ok(canonical);
         }
     }
@@ -149,11 +167,51 @@ fn validate_path(path: &str) -> Result<PathBuf, String> {
     ];
     for prefix in &denied_prefixes {
         if path_str.starts_with(prefix) {
-            return Err(format!("access denied: system path"));
+            return Err("access denied: system path".to_string());
         }
     }
 
-    Ok(canonical)
+    // 非 $HOME 子目录的非系统路径也拒绝
+    // 允许 /tmp 子目录（某些开发工具会用到），但检查敏感子路径
+    if path_str.starts_with("/tmp") || path_str.starts_with("/private/tmp") {
+        return Ok(canonical);
+    }
+
+    Err("access denied: path outside home directory".to_string())
+}
+
+/// P1-17: 检查路径是否属于敏感目录。
+/// 比较规则：如果 canonical 路径去掉 home 前缀后的第一级目录名
+/// 匹配 SENSITIVE_DIR_NAMES 中的任一项，则拒绝。
+/// 也检查深层路径（如 ~/.ssh/authorized_keys）——任何以敏感目录为前缀的路径都拒绝。
+fn is_sensitive_path(canonical: &Path, home: &Path) -> bool {
+    // 去掉 home 前缀得到相对路径（如 "/.ssh/id_rsa" 或 "/.kube/config"）
+    let stripped = match canonical.strip_prefix(home) {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+
+    // 取相对路径的第一段（如 ".ssh"）
+    if let Some(first_component) = stripped.iter().next() {
+        let name = first_component.to_string_lossy();
+        // 检查一级敏感目录（.ssh, .gnupg, .kube, .aws, .pki, .azure）
+        if SENSITIVE_DIR_NAMES.contains(&name.as_ref()) {
+            return true;
+        }
+        // 检查二级敏感目录（.config/gcloud）
+        // stripped 形如 ".config/gcloud/..."
+        if name == ".config" {
+            if let Some(second) = stripped.iter().nth(1) {
+                let second_name = second.to_string_lossy();
+                let combined = format!(".config/{}", second_name);
+                if SENSITIVE_DIR_NAMES.contains(&combined.as_str()) {
+                    return true;
+                }
+            }
+        }
+    }
+
+    false
 }
 
 // ── Tauri 命令 ──────────────────────────────────────────────────
@@ -171,6 +229,10 @@ pub async fn fs_list_dir(path: String) -> Result<ListDirResult, String> {
         .filter_map(|e| e.ok())
         .filter_map(|e| {
             let name = e.file_name().to_string_lossy().to_string();
+            // P1-17: 在列表中过滤掉敏感目录条目
+            if is_sensitive_entry_name(&name) {
+                return None;
+            }
             // 隐藏文件仍然显示（开发者需要看到 .gitignore 等）
             let meta = e.metadata().ok()?;
             let is_dir = meta.is_dir();
@@ -306,6 +368,13 @@ pub async fn fs_read_file(path: String) -> Result<FileContent, String> {
     }
 }
 
+/// P1-17: 检查目录条目名是否为敏感目录（一级目录名快速匹配）。
+/// 用于 fs_list_dir 中过滤敏感目录条目，避免前端展示。
+fn is_sensitive_entry_name(name: &str) -> bool {
+    // 一级敏感目录名直接匹配
+    SENSITIVE_DIR_NAMES.contains(&name)
+}
+
 /// 读取文件头部（指定字节数）
 fn read_file_head(path: &PathBuf, limit: usize) -> Result<Vec<u8>, String> {
     use std::io::Read;
@@ -374,5 +443,39 @@ mod tests {
         if let Some(home) = home_dir() {
             assert!(validate_path(home.to_string_lossy().as_ref()).is_ok());
         }
+    }
+
+    #[test]
+    fn test_sensitive_path_detection() {
+        if let Some(home) = home_dir() {
+            let ssh_path = home.join(".ssh");
+            assert!(is_sensitive_path(&ssh_path, &home));
+            let ssh_key_path = home.join(".ssh").join("id_rsa");
+            assert!(is_sensitive_path(&ssh_key_path, &home));
+            let gnupg_path = home.join(".gnupg");
+            assert!(is_sensitive_path(&gnupg_path, &home));
+            let kube_path = home.join(".kube");
+            assert!(is_sensitive_path(&kube_path, &home));
+            let aws_path = home.join(".aws");
+            assert!(is_sensitive_path(&aws_path, &home));
+            let gcloud_path = home.join(".config").join("gcloud");
+            assert!(is_sensitive_path(&gcloud_path, &home));
+            // Non-sensitive paths should pass
+            let projects_path = home.join("projects");
+            assert!(!is_sensitive_path(&projects_path, &home));
+            let claude_path = home.join(".claude");
+            assert!(!is_sensitive_path(&claude_path, &home));
+        }
+    }
+
+    #[test]
+    fn test_sensitive_entry_name() {
+        assert!(is_sensitive_entry_name(".ssh"));
+        assert!(is_sensitive_entry_name(".gnupg"));
+        assert!(is_sensitive_entry_name(".kube"));
+        assert!(is_sensitive_entry_name(".aws"));
+        assert!(!is_sensitive_entry_name(".claude"));
+        assert!(!is_sensitive_entry_name("projects"));
+        assert!(!is_sensitive_entry_name(".git"));
     }
 }

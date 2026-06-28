@@ -160,9 +160,11 @@ export class PaletteController {
         const dotClass = t.status === 'running' ? 'running' : t.status === 'crashed' ? 'crashed' : 'exited';
         const kbd = t.index < 9 ? `<span class="palette-item-kbd">⌘${t.index + 1}</span>` : '';
         const cwdBasename = t.cwd ? t.cwd.split('/').pop() : '';
+        // Guard against empty label — use '?' fallback if label is empty
+        const initial = esc(((t.label || '?')[0] || '?').toUpperCase());
         html +=
           `<div class="palette-item${i === 0 ? ' sel' : ''}" data-idx="${this._items.length}">` +
-          `<span class="palette-item-icon" style="background:${this._orbColorForId(t.id)}">${esc(t.label[0].toUpperCase())}</span>` +
+          `<span class="palette-item-icon" style="background:${this._orbColorForId(t.id)}">${initial}</span>` +
           `<span class="palette-item-label">${esc(t.label)}</span>` +
           `<span class="palette-item-detail">${esc(cwdBasename)}</span>` +
           `${kbd}</div>`;
@@ -326,22 +328,58 @@ export class PaletteController {
   }
 
   async _saveSetting(key, value) {
-    const cfg = {};
+    // P1-18 fix: read-merge-write to avoid partial config overwriting other keys.
+    // If loadConfig fails, fall back to saving just the changed key (better than nothing).
+    let cfg = {};
+    try {
+      cfg = await ipc.loadConfig();
+      if (!cfg || typeof cfg !== 'object') cfg = {};
+    } catch (_) {
+      // Use empty base — first-run or backend unreachable
+    }
+
     if (key === 'command') cfg.default_cmd = value;
     else if (key === 'args') cfg.default_args = value.split(/\s+/).filter(Boolean);
     else if (key === 'cwd') cfg.default_cwd = value;
     else if (key === 'max') cfg.max_terminals = parseInt(value) || 10;
     else if (key === 'buffer') cfg.ring_buffer_max_mb = parseInt(value) || 10;
-    try { await ipc.saveConfig(cfg); } catch (e) { console.warn('[palette] save failed', e); }
+
+    // P1-18: Visual feedback on save result
+    const feedbackTarget = this.results.querySelector('.palette-group-label');
+    try {
+      await ipc.saveConfig(cfg);
+      // Success: brief green flash on the label
+      if (feedbackTarget) {
+        feedbackTarget.style.color = '#4ade80';
+        setTimeout(() => { feedbackTarget.style.color = ''; }, 200);
+      }
+    } catch (e) {
+      console.warn('[palette] save failed', e);
+      // Failure: red flash + ✗ indicator
+      if (feedbackTarget) {
+        const origText = feedbackTarget.textContent;
+        feedbackTarget.style.color = '#f87171';
+        feedbackTarget.textContent = origText + ' ✗';
+        setTimeout(() => {
+          feedbackTarget.style.color = '';
+          feedbackTarget.textContent = origText;
+        }, 1200);
+      }
+    }
   }
 
   _orbColorForId(id) {
     const orb = document.querySelector(`.orb[data-id="${id}"]`);
     if (orb) {
       const c = orb.dataset.identityColor;
-      if (c) return c.replace('var(', '').replace(')', '');
+      if (c) {
+        // If already a var() expression, return as-is; if a bare CSS variable, wrap with var()
+        if (c.startsWith('var(')) return c;
+        if (c.startsWith('--')) return `var(${c})`;
+        return c; // hex or other valid CSS value
+      }
     }
-    return '--id-emerald';
+    return 'var(--id-emerald)';
   }
 }
 

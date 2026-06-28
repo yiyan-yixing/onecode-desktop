@@ -21,6 +21,8 @@ import { PaletteController } from './palette.js';
 import { RippleController } from './ripple.js';
 import { CcStatusView } from './cc-status.js';
 import { FileExplorerController } from './file-explorer.js';
+import { ThemeManager } from './theme.js';
+import { AmbientController } from './ambient.js';
 import { initWizard, destroyWizard } from './wizard.js';
 import * as ipc from './ipc-bridge.js';
 const tabManager = new TabManager();
@@ -28,9 +30,54 @@ const orbital = new OrbitalController();
 const palette = new PaletteController();
 const ripple = new RippleController();
 const fileExplorer = new FileExplorerController();
+const themeManager = new ThemeManager();
+const ambientController = new AmbientController();
 let ccView = null;
 
+// ── P1-13: Backend disconnected banner ──────────────────────────────
+let _disconnectBanner = null;
+
+function showDisconnectBanner() {
+  if (_disconnectBanner) return; // already shown
+  const viewport = document.getElementById('termViewport');
+  if (!viewport) return;
+  const banner = document.createElement('div');
+  banner.id = 'ipcDisconnectBanner';
+  banner.className = 'ipc-disconnect-banner';
+  banner.innerHTML =
+    '<span class="ipc-disconnect-msg">⚠ 连接断开 — 后端服务不可用</span>' +
+    '<button class="ipc-disconnect-dismiss" title="关闭">✕</button>';
+  banner.querySelector('.ipc-disconnect-dismiss').addEventListener('click', () => {
+    dismissDisconnectBanner();
+  });
+  viewport.prepend(banner);
+  _disconnectBanner = banner;
+}
+
+function dismissDisconnectBanner() {
+  if (_disconnectBanner) {
+    _disconnectBanner.remove();
+    _disconnectBanner = null;
+  }
+}
+
+window.addEventListener('ipc-disconnected', () => {
+  console.warn('[ipc] backend disconnected — consecutive IPC failures reached threshold');
+  showDisconnectBanner();
+});
+
+window.addEventListener('ipc-reconnected', () => {
+  console.info('[ipc] backend reconnected');
+  dismissDisconnectBanner();
+});
+
 async function init() {
+  // Theme (dark-only Aurora paradigm)
+  themeManager.init();
+
+  // Ambient: fade statusbar after 8s idle
+  ambientController.init();
+
   // Tab + Orbital + Palette
   tabManager.init();
   tabManager.orbital = orbital;
@@ -46,6 +93,8 @@ async function init() {
     if (orbital._activeTab === 'files' && fileExplorer) {
       fileExplorer.syncCwd(tm.getActiveCwd());
     }
+    // 切换标签页/目录时刷新 CC Status 徽章
+    if (ccView) ccView.refresh();
   };
 
   initKeybindings(tabManager);
@@ -54,6 +103,7 @@ async function init() {
   ccView = new CcStatusView({
     badgeRoot: document.getElementById('ribbonBadges'),
     getProjectDir: () => tabManager.getActiveCwd(),
+    getActiveBackend: () => tabManager.getActiveBackend(),
   });
   ccView.onAgents = (agents) => {
     tabManager.agentProvider = () => agents;
@@ -183,6 +233,20 @@ function initKeybindings(tm) {
     }
     if (!e[mod]) return;
     const key = e.key.toLowerCase();
+
+    // ★ 修复: 非 Mac 平台 Ctrl+W/T 在终端内不应被应用截获
+    // 终端内这些快捷键应发送到 PTY（Ctrl+W = 删除前一个词, Ctrl+T = 交换字符）
+    // 只在非终端焦点时才拦截
+    if (!navigator.platform.includes('Mac')) {
+      const activeTerm = tm.activeId ? tm.tabs.get(tm.activeId) : null;
+      const xtermTa = activeTerm?.term?.textarea;
+      if (xtermTa && (document.activeElement === xtermTa ||
+          xtermTa.contains(document.activeElement))) {
+        // 终端 textarea 有焦点 — 不拦截，让按键传到 PTY
+        return;
+      }
+    }
+
     if (key === 't') {
       e.preventDefault();
       if (e.shiftKey) {

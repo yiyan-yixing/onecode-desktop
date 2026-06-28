@@ -2,6 +2,9 @@
 // 移植自 onecode.html 的 ccBadge/renderCcBadges：定期拉取 cc_status，
 // 在状态栏渲染 skills/hooks/plugins/tasks 计数徽章；
 // 同时把 agents 列表回调出去供 @mention 使用。
+//
+// 当活跃后端不是 "claude-code" 时，跳过 IPC 调用并清空徽章
+// （cc_status 仅适用于 Claude Code 的 .claude 目录结构）。
 
 import * as ipc from './ipc-bridge.js';
 
@@ -19,9 +22,10 @@ const ICONS = {
 };
 
 export class CcStatusView {
-  constructor({ badgeRoot, getProjectDir }) {
+  constructor({ badgeRoot, getProjectDir, getActiveBackend }) {
     this.badgeRoot = badgeRoot; // 徽章容器 DOM
     this.getProjectDir = getProjectDir; // () => string|null 活跃终端 cwd
+    this.getActiveBackend = getActiveBackend || (() => null); // () => string|null 活跃后端 ID
     this.agents = [];
     this.onAgents = null; // agents 列表变更回调（@mention 用）
     this.onStatus = null; // status 数据变更回调（sidebar 用）
@@ -39,6 +43,20 @@ export class CcStatusView {
   }
 
   async refresh() {
+    const backend = this.getActiveBackend();
+
+    // cc_status only works with claude-code backend (reads .claude/ directories)
+    // For other backends, clear badges and skip the IPC call
+    if (backend && backend !== 'claude-code') {
+      this._clearBadges();
+      // Notify empty agents list
+      if (this.agents.length > 0) {
+        this.agents = [];
+        if (typeof this.onAgents === 'function') this.onAgents([]);
+      }
+      return;
+    }
+
     const dir = this.getProjectDir();
     const data = await ipc.ccStatus(dir).catch(() => null);
     if (!data) return;
@@ -51,6 +69,19 @@ export class CcStatusView {
     this._lastData = data;
     this._render(data);
     if (typeof this.onStatus === 'function') this.onStatus(data);
+  }
+
+  _clearBadges() {
+    if (!this.badgeRoot) return;
+    const keys = ['skills', 'hooks', 'plugins', 'tasks'];
+    for (const t of keys) {
+      const pill = this.badgeRoot.querySelector(`[data-cc="${t}"]`);
+      if (pill) {
+        const numEl = pill.querySelector('.n');
+        if (numEl && numEl.textContent !== '0') numEl.textContent = '0';
+        pill.classList.remove('has');
+      }
+    }
   }
 
   _render(data) {
