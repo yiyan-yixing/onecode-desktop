@@ -4,6 +4,8 @@
 
 OneCode Desktop 是 [OneCode](https://github.com/yiyan-yixing/onecode) 的桌面形态。Web 版跑在 Docker 容器里靠浏览器访问，多任务只能开多个浏览器标签——切标签丢现场、标签不持久、无法后台常驻。Desktop 用原生窗口解决：多终端 Tab、托盘常驻、会话配置持久化。
 
+![OneCode Desktop Screenshot](docs/screenshot.png)
+
 ## 功能亮点
 
 - 🖥️ **多终端管理** — 一个窗口内创建、切换、关闭多个 Claude Code 终端
