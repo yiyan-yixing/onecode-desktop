@@ -114,11 +114,11 @@ export function initImeFix(term, termEl) {
 
   // ★ 修复 5: 记录 compositionend 时的组合文本，供 Fix 3 剥离前缀
   let _lastCompositionText = '';
-  let _lastCompositionTextTime = 0;
 
   ta.addEventListener('compositionstart', () => {
     isComposing = true;
     _compositionJustEnded = false;
+    _lastCompositionText = '';
   }, true);
 
   ta.addEventListener('compositionend', () => {
@@ -141,10 +141,13 @@ export function initImeFix(term, termEl) {
     //
     // 只记录 _lastCompositionText：Fix 3 在后续 input 事件中检查
     // textarea 是否以组合文本开头，剥离前缀只发新增部分。
+    // ★ 修复 5 v5 改进：去掉时间窗口过期机制，改为事件驱动消费——
+    // _lastCompositionText 在以下时机清除：被 Fix 3 消费、新 composition 开始、失焦。
+    // 根因：200ms 窗口过期后，textarea 中陈旧的组合文本不再被剥离，
+    // 用户按空格/数字时 Fix 3 读取 ta.value 含陈旧前缀 → 重复输出。
     const value = ta.value;
     if (value) {
       _lastCompositionText = value;
-      _lastCompositionTextTime = Date.now();
     }
   }, true);
 
@@ -152,6 +155,7 @@ export function initImeFix(term, termEl) {
   ta.addEventListener('blur', () => {
     isComposing = false;
     _compositionJustEnded = false;
+    _lastCompositionText = '';
   }, true);
 
   ta.addEventListener('keydown', (e) => {
@@ -181,19 +185,22 @@ export function initImeFix(term, termEl) {
       // 例：输入"我们"后按空格 → textarea 有"我们 " →
       //     xterm 已通过 onData 发送"我们"，Fix 3 只应发送" "
       //
-      // 策略：
+      // 策略（v5 改进：去掉 200ms 时间窗口，改为事件驱动消费）：
       // 1. textarea === _lastCompositionText → IME 回写，无新输入 → 跳过
       // 2. textarea 以 _lastCompositionText 开头 → 剥离前缀，只发新增部分
-      // 3. 200ms 窗口外 → _lastCompositionText 过期，正常处理
-      if (_lastCompositionText && (Date.now() - _lastCompositionTextTime) < 200) {
+      // 3. _lastCompositionText 为空（已消费 / compositionstart / blur）→ 正常处理
+      // 消费后清除 _lastCompositionText，防止后续 input 事件重复剥离。
+      if (_lastCompositionText) {
         if (value === _lastCompositionText) {
           // IME 回写，与组合文本完全相同 → 跳过并清空
+          _lastCompositionText = '';
           ta.value = '';
           return;
         }
         if (value.startsWith(_lastCompositionText)) {
           // 剥离组合文本前缀，只处理新增部分
           const newData = value.slice(_lastCompositionText.length);
+          _lastCompositionText = '';
           ta.value = '';
           if (!newData) return;
           // 新增部分通过 Fix 4 去重检查后发送

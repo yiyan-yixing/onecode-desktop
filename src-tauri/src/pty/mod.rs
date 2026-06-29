@@ -458,6 +458,15 @@ fn create_pty(
     let resolved_path = resolve_full_path();
     cb.env("PATH", resolved_path);
 
+    // macOS GUI 进程不继承用户 shell 的 locale 设置，
+    // 子进程默认 C/POSIX locale → 无法正确处理 UTF-8 CJK 文本（乱码）。
+    // 策略：解析用户实际 locale，确保子进程 LANG/LC_CTYPE 为 UTF-8。
+    // 不设 LC_ALL（会覆盖用户 LC_MESSAGES/LC_TIME 等自定义偏好）。
+    let resolved_locale = resolve_locale();
+    cb.env("LANG", &resolved_locale);
+    cb.env("LC_CTYPE", &resolved_locale);
+    cb.env("COLORTERM", "truecolor");
+
     for (k, v) in env {
         cb.env(k, v);
     }
@@ -711,4 +720,75 @@ fn ensure_local_bin(path: &str, home: &str) -> String {
     } else {
         format!("{local_bin}:{path}")
     }
+}
+
+/// 解析用户 locale，确保子进程 LANG/LC_CTYPE 为 UTF-8。
+///
+/// macOS GUI 应用（从 Dock/Finder 启动）不继承用户 shell 的 locale 设置，
+/// 子进程默认 C/POSIX locale → 无法正确处理 UTF-8 多字节字符（CJK 乱码）。
+///
+/// 策略：
+/// 1. 检查当前进程 LANG（如已是 UTF-8 则直接用）
+/// 2. 查询 login shell 的 $LANG（匹配用户实际 locale 配置）
+/// 3. 尝试 macOS `defaults read -g AppleLocale` + 拼接 `.UTF-8`
+/// 4. 兜底 `en_US.UTF-8`
+///
+/// 不设 LC_ALL（会覆盖用户 LC_MESSAGES/LC_TIME 等自定义偏好），
+/// 只设 LANG + LC_CTYPE（前者为默认 locale，后者控制字符编码）。
+fn resolve_locale() -> String {
+    // 1. 检查当前进程环境
+    if let Ok(lang) = std::env::var("LANG") {
+        if lang.contains("UTF-8") || lang.contains("utf-8") || lang.contains("utf8") {
+            return lang;
+        }
+        // LANG 存在但非 UTF-8 — 强制 UTF-8 变体（如 en_US.ISO8859-1 → en_US.UTF-8）
+        if let Some(dot) = lang.find('.') {
+            return format!("{}.UTF-8", &lang[..dot]);
+        }
+        return format!("{}.UTF-8", lang);
+    }
+
+    // 2. 查询 login shell（与 resolve_full_path 同模式）
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
+    for args in &[
+        &["-l", "-i", "-c", "echo $LANG"][..],
+        &["-l", "-c", "echo $LANG"],
+    ] {
+        if let Ok(output) = std::process::Command::new(&shell).args(*args).output() {
+            if output.status.success() {
+                let lang = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !lang.is_empty()
+                    && (lang.contains("UTF-8")
+                        || lang.contains("utf-8")
+                        || lang.contains("utf8"))
+                {
+                    return lang;
+                }
+                // Shell 有 LANG 但非 UTF-8 — 升级
+                if !lang.is_empty() {
+                    if let Some(dot) = lang.find('.') {
+                        return format!("{}.UTF-8", &lang[..dot]);
+                    }
+                    return format!("{}.UTF-8", lang);
+                }
+            }
+        }
+    }
+
+    // 3. 尝试 macOS defaults（AppleLocale）
+    if let Ok(output) =
+        std::process::Command::new("defaults")
+            .args(["read", "-g", "AppleLocale"])
+            .output()
+    {
+        if output.status.success() {
+            let locale = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !locale.is_empty() {
+                return format!("{}.UTF-8", locale);
+            }
+        }
+    }
+
+    // 4. 兜底
+    "en_US.UTF-8".to_string()
 }

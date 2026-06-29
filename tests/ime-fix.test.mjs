@@ -560,18 +560,63 @@ describe('Scenario I: Fix 5 v5 — record, prefix strip', () => {
     } finally { env.restoreRaf(); }
   });
 
-  test('IME-I4: _lastCompositionText expires after 200ms', async () => {
+  test('IME-I4: _lastCompositionText persists until consumed (no time expiry)', async () => {
     const env = createImeEnv();
     try {
       env.dispatchTaEvent('compositionstart', {});
       env.ta.value = '我们';
       env.dispatchTaEvent('compositionend', {});
+      env.simulateXtermOnData('我们');
       await new Promise(r => setTimeout(r, 210));
-      // Expired → normal Fix 3 behavior
-      env.ta.value = '我们';
+      // Even after 210ms, prefix stripping still works — no time-based expiry
+      env.ta.value = '我们 ';
       env.dispatchElEvent('input', { inputType: 'insertText', isComposing: false });
-      // After expiry, Fix 3 sends (no prefix strip) — but Fix 4 might catch it
-      assert.ok(env.sentViaImeSendFn.length > 0 || env.sentViaOnData.length > 0, 'sent after expiry');
+      // "我们" prefix stripped → only " " sent via _imeSendFn
+      // xterm also sent " " → Fix 4 dedup may catch it
+      // Key assertion: NO duplicate of "我们"
+      const ptySent = env.sentToPty();
+      const hasDuplicate = ptySent.filter(d => d.includes('我们')).length > 1;
+      assert.ok(!hasDuplicate, 'no duplicate composition text even after 210ms delay');
+    } finally { env.restoreRaf(); }
+  });
+
+  test('IME-I5: _lastCompositionText cleared after consumed', () => {
+    const env = createImeEnv();
+    try {
+      env.dispatchTaEvent('compositionstart', {});
+      env.ta.value = '我们';
+      env.dispatchTaEvent('compositionend', {});
+      env.simulateXtermOnData('我们');
+
+      // First input: prefix stripped, _lastCompositionText consumed
+      env.ta.value = '我们 ';
+      env.dispatchElEvent('input', { inputType: 'insertText', isComposing: false });
+
+      // Second input: no prefix stripping (_lastCompositionText already consumed)
+      env.ta.value = 'a';
+      env.dispatchElEvent('input', { inputType: 'insertText', isComposing: false });
+      // "a" sent normally, no stale prefix
+      assert.ok(env.sentViaImeSendFn.includes('a'), 'second char sent normally after prefix consumed');
+      // No duplicate of "我们" in second send
+      assert.ok(!env.sentViaImeSendFn.some(d => d.includes('我们') && d !== '我们'),
+        'no stale composition text in second input');
+    } finally { env.restoreRaf(); }
+  });
+
+  test('IME-I6: _lastCompositionText cleared by compositionstart', () => {
+    const env = createImeEnv();
+    try {
+      env.dispatchTaEvent('compositionstart', {});
+      env.ta.value = '我们';
+      env.dispatchTaEvent('compositionend', {});
+      env.simulateXtermOnData('我们');
+
+      // New composition starts → _lastCompositionText cleared
+      env.dispatchTaEvent('compositionstart', {});
+      env.ta.value = '好';
+      env.dispatchTaEvent('compositionend', {});
+      env.simulateXtermOnData('好');
+      assert.deepEqual(env.sentToPty(), ['我们', '好'], 'new composition independent of old');
     } finally { env.restoreRaf(); }
   });
 });
