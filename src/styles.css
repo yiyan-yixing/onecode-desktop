@@ -1180,6 +1180,22 @@ body::before {
   cursor: not-allowed;
 }
 
+.np-hint {
+  margin-top: 4px;
+  padding: 8px 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--tx-warm3);
+  background: var(--sand-light, rgba(255,241,230,.12));
+  border-radius: 6px;
+}
+
+.np-hint .np-mono {
+  font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
+  font-size: 11px;
+  word-break: break-all;
+}
+
 /* ══════════ @Mention Portal ══════════ */
 
 .mention-portal {

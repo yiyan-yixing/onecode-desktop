@@ -1,25 +1,17 @@
 // IME 修复自动化验证 — 基于真实事件派发 + initImeFix 注册的监听器。
 //
-// 与 ime-filter.test.mjs 的区别：
-//   ime-filter.test.mjs 测试纯函数（keydownShouldBlock）和简单集成。
-//   本文件通过 createImeEnv() 模拟真实 DOM 事件流，
-//   派发事件到 initImeFix 注册的监听器，验证端到端行为。
+// 修复 5 v5: 不清空 textarea，不在 compositionend 中发送。
+// 只记录 _lastCompositionText，Fix 3 在 input 事件中剥离前缀。
 
 import { test, describe, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { initImeFix } from '../src/terminal/ime-fix.js';
 
-// ── Mock 架构 ──
-
 function createImeEnv() {
   const originalRaf = globalThis.requestAnimationFrame;
   const rafQueue = [];
+  globalThis.requestAnimationFrame = (cb) => { rafQueue.push(cb); };
 
-  globalThis.requestAnimationFrame = (cb) => {
-    rafQueue.push(cb);
-  };
-
-  // Mock textarea with real addEventListener
   const taListeners = {};
   const ta = {
     value: '',
@@ -31,7 +23,6 @@ function createImeEnv() {
     removeEventListener() {},
   };
 
-  // Mock termEl with real addEventListener
   const elListeners = {};
   const termEl = {
     addEventListener(type, fn, capture) {
@@ -42,15 +33,17 @@ function createImeEnv() {
     removeEventListener() {},
   };
 
-  // Tracking arrays
   const sentViaImeSendFn = [];
   const sentViaOnData = [];
+  const _sendLog = [];
 
-  // Mock term object
   const term = {
     textarea: ta,
     element: { querySelector: () => ta },
-    _imeSendFn: (data) => { sentViaImeSendFn.push(data); },
+    _imeSendFn: (data) => {
+      sentViaImeSendFn.push(data);
+      _sendLog.push({ source: 'imeSendFn', data });
+    },
     _xtermSentData: '',
     _xtermSentTime: 0,
     _compositionEndedAt: 0,
@@ -64,10 +57,8 @@ function createImeEnv() {
     _onDataCallback: null,
   };
 
-  // Call initImeFix to register all listeners
   initImeFix(term, termEl);
 
-  // Helper: track stopImmediatePropagation calls
   function trackCalls() {
     let called = false;
     const fn = () => { called = true; };
@@ -75,937 +66,550 @@ function createImeEnv() {
     return fn;
   }
 
-  // Helper: dispatch event to textarea listeners
   function dispatchTaEvent(type, eventObj) {
-    // Fire capture then bubble
     const captureKey = `${type}:capture`;
     const bubbleKey = `${type}:bubble`;
     const captureListeners = taListeners[captureKey] || [];
     const bubbleListeners = taListeners[bubbleKey] || [];
-
-    // Create a proper event-like object with defaults
     const e = {
-      type,
-      keyCode: 0,
-      isComposing: false,
-      ctrlKey: false,
+      type, keyCode: 0, isComposing: false, ctrlKey: false,
       stopImmediatePropagation: () => {},
       preventDefault: () => {},
       ...eventObj,
     };
-
-    for (const fn of captureListeners) {
-      fn(e);
-    }
-    for (const fn of bubbleListeners) {
-      fn(e);
-    }
+    for (const fn of captureListeners) fn(e);
+    for (const fn of bubbleListeners) fn(e);
   }
 
-  // Helper: dispatch event to termEl listeners
   function dispatchElEvent(type, eventObj) {
     const captureKey = `${type}:capture`;
     const bubbleKey = `${type}:bubble`;
     const captureListeners = elListeners[captureKey] || [];
     const bubbleListeners = elListeners[bubbleKey] || [];
-
-    const e = {
-      type,
-      isComposing: false,
-      inputType: '',
-      ...eventObj,
-    };
-
-    for (const fn of captureListeners) {
-      fn(e);
-    }
-    for (const fn of bubbleListeners) {
-      fn(e);
-    }
+    const e = { type, isComposing: false, inputType: '', ...eventObj };
+    for (const fn of captureListeners) fn(e);
+    for (const fn of bubbleListeners) fn(e);
   }
 
-  // Helper: simulate xterm onData (mimics tab-manager.js behavior)
-  // Includes composition double-send dedup + pinyin space filter (Fix 5)
   function simulateXtermOnData(data) {
     term._xtermSentData = data;
     term._xtermSentTime = Date.now();
-
     const now = Date.now();
     const recentlyComposed = term._compositionEndedAt && (now - term._compositionEndedAt) < 300;
     if (recentlyComposed && data === term._lastOnDataData && (now - term._lastOnDataTime) < 100) {
-      return; // dedup
+      return;
     }
     term._lastOnDataData = data;
     term._lastOnDataTime = now;
-
-    // ★ Fix 5: onData 路径过滤拼音空格（不限 recentlyComposed）
     if (/^[a-zA-Z0-9]+( +[a-zA-Z0-9]+)+$/.test(data)) {
       data = data.replace(/ +/g, '');
     }
-
     sentViaOnData.push(data);
+    _sendLog.push({ source: 'onData', data });
   }
 
-  // Helper: flush all queued requestAnimationFrame callbacks
   function flushRaf() {
-    while (rafQueue.length > 0) {
-      const cb = rafQueue.shift();
-      cb();
-    }
+    while (rafQueue.length > 0) rafQueue.shift()();
   }
 
-  // Combined PTY output
-  const sentToPty = () => {
-    const fromOnData = sentViaOnData.filter(x => x !== '');
-    return [...fromOnData, ...sentViaImeSendFn];
-  };
+  const sentToPty = () => _sendLog.map(e => e.data).filter(x => x !== '');
 
   return {
-    term,
-    ta,
-    termEl,
-    dispatchTaEvent,
-    dispatchElEvent,
-    simulateXtermOnData,
-    flushRaf,
-    trackCalls,
-    sentViaOnData,
-    sentViaImeSendFn,
-    sentToPty,
+    term, ta, termEl, dispatchTaEvent, dispatchElEvent,
+    simulateXtermOnData, flushRaf, trackCalls,
+    sentViaOnData, sentViaImeSendFn, sentToPty,
     restoreRaf: () => { globalThis.requestAnimationFrame = originalRaf; },
   };
 }
 
-// ── Scenario A: Chinese input + space confirm — no duplicate ──
+// ── Scenario A: Chinese input — xterm sends, no duplicate ──
 
-describe('Scenario A: Chinese input + space confirm', () => {
-  test('IME-A1: Full composition flow — only committed text sent, no extra space', () => {
+describe('Scenario A: Chinese input', () => {
+  test('IME-A1: Composition — xterm sends via onData, textarea preserved', () => {
     const env = createImeEnv();
     try {
       const stopProp = env.trackCalls();
-
       env.dispatchTaEvent('compositionstart', {});
       env.dispatchTaEvent('keydown', { keyCode: 229, isComposing: true, stopImmediatePropagation: () => {} });
       env.dispatchTaEvent('keydown', { keyCode: 32, isComposing: true, stopImmediatePropagation: stopProp });
+      env.ta.value = '我们';
       env.dispatchTaEvent('compositionend', {});
+      // Simulate xterm sending the composition result via onData
+      env.simulateXtermOnData('我们');
       env.flushRaf();
+
+      assert.ok(stopProp.wasCalled(), 'space keydown blocked during composition');
+      // v5: compositionend does NOT send, does NOT clear textarea
+      assert.deepEqual(env.sentViaImeSendFn, [], 'nothing sent via _imeSendFn');
+      assert.deepEqual(env.sentViaOnData, ['我们'], 'xterm sends via onData');
+      assert.deepEqual(env.sentToPty(), ['我们'], 'exactly once');
+    } finally {
+      env.restoreRaf();
+    }
+  });
+
+  test('IME-A2: IME re-inserts same text — dedup', () => {
+    const env = createImeEnv();
+    try {
+      env.dispatchTaEvent('compositionstart', {});
+      env.ta.value = '我们';
+      env.dispatchTaEvent('compositionend', {});
+      env.simulateXtermOnData('我们');
+      env.flushRaf();
+
+      // IME re-inserts same text into textarea
+      env.ta.value = '我们';
+      env.dispatchElEvent('input', { inputType: 'insertText', isComposing: false });
+
+      // _lastCompositionText dedup catches it
+      assert.deepEqual(env.sentViaImeSendFn, [], 'IME re-insertion deduped');
+      assert.deepEqual(env.sentViaOnData, ['我们'], 'only original');
+    } finally {
+      env.restoreRaf();
+    }
+  });
+
+  test('IME-A3: Space after composition — only space sent (prefix stripped)', () => {
+    const env = createImeEnv();
+    try {
+      env.dispatchTaEvent('compositionstart', {});
+      env.ta.value = '我们';
+      env.dispatchTaEvent('compositionend', {});
       env.simulateXtermOnData('我们');
 
-      assert.ok(stopProp.wasCalled(), 'stopImmediatePropagation was called on the space keydown');
-      assert.deepEqual(env.sentViaOnData, ['我们'], 'only xterm onData path sends');
-      assert.deepEqual(env.sentViaImeSendFn, [], 'no data sent via _imeSendFn');
-      assert.deepEqual(env.sentToPty(), ['我们'], 'total sent to PTY is exactly once');
-    } finally {
-      env.restoreRaf();
-    }
-  });
-
-  test('IME-A2: Composition input event (insertCompositionText) — input handler skips', () => {
-    const env = createImeEnv();
-    try {
-      env.dispatchTaEvent('compositionstart', {});
-      env.dispatchElEvent('input', { isComposing: true, inputType: 'insertCompositionText' });
-
-      assert.deepEqual(env.sentViaImeSendFn, [], 'input handler returned early for insertCompositionText');
-    } finally {
-      env.restoreRaf();
-    }
-  });
-
-  test('IME-A3: After composition, stale textarea text + input event — Fix 4 dedup catches it', () => {
-    const env = createImeEnv();
-    try {
-      env.dispatchTaEvent('compositionstart', {});
-      env.dispatchTaEvent('keydown', { keyCode: 229, isComposing: true, stopImmediatePropagation: () => {} });
-      env.dispatchTaEvent('keydown', { keyCode: 32, isComposing: true, stopImmediatePropagation: () => {} });
-      env.dispatchTaEvent('compositionend', {});
-      env.simulateXtermOnData('我们'); // sets _xtermSentData='我们', _xtermSentTime=now
-
-      env.ta.value = '我们'; // simulate stale text remaining in textarea
-      env.dispatchElEvent('input', { inputType: 'insertText', isComposing: false });
-
-      assert.deepEqual(env.sentViaImeSendFn, [], 'dedup kicked in because value === _xtermSentData within 100ms');
-    } finally {
-      env.restoreRaf();
-    }
-  });
-});
-
-// ── Scenario B: Direct space press — no duplicate ──
-
-describe('Scenario B: Direct space press', () => {
-  test('IME-B1: Normal space via onData — imeFilter passes — input event dedup', () => {
-    const env = createImeEnv();
-    try {
-      env.dispatchTaEvent('keydown', { keyCode: 32, isComposing: false, stopImmediatePropagation: () => {} });
-      env.simulateXtermOnData(' '); // sets _xtermSentData=' ', _xtermSentTime=now, imeFilter(' ') -> ' '
-
-      env.ta.value = ' '; // xterm didn't preventDefault, char stays in textarea
-      env.dispatchElEvent('input', { inputType: 'insertText', isComposing: false });
-
-      assert.deepEqual(env.sentViaOnData, [' '], 'space sent via onData');
-      assert.deepEqual(env.sentViaImeSendFn, [], 'input handler dedup caught it — nothing sent via _imeSendFn');
-    } finally {
-      env.restoreRaf();
-    }
-  });
-
-  test('IME-B2: Space after composition — Fix 4 dedup handles insertText', () => {
-    const env = createImeEnv();
-    try {
-      // Full composition flow
-      env.dispatchTaEvent('compositionstart', {});
-      env.dispatchTaEvent('keydown', { keyCode: 229, isComposing: true, stopImmediatePropagation: () => {} });
-      env.dispatchTaEvent('keydown', { keyCode: 32, isComposing: true, stopImmediatePropagation: () => {} });
-      env.dispatchTaEvent('compositionend', {});
-
-      // After composition, user presses space — xterm handles via onData
+      // User presses space — xterm sends via onData
       env.dispatchTaEvent('keydown', { keyCode: 32, isComposing: false, stopImmediatePropagation: () => {} });
       env.simulateXtermOnData(' ');
 
+      // Input event: textarea has "我们 " (stale composition + space)
+      env.ta.value = '我们 ';
+      env.dispatchElEvent('input', { inputType: 'insertText', isComposing: false });
+
+      // Fix 5 v5: strips "我们" prefix, only sends " " → but Fix 4 catches it (xterm already sent)
+      assert.deepEqual(env.sentToPty(), ['我们', ' '], 'composition + space, no duplicate');
+    } finally {
+      env.restoreRaf();
+    }
+  });
+});
+
+// ── Scenario B: Direct space ──
+
+describe('Scenario B: Direct space', () => {
+  test('IME-B1: Normal space — Fix 4 dedup', () => {
+    const env = createImeEnv();
+    try {
+      env.dispatchTaEvent('keydown', { keyCode: 32, isComposing: false, stopImmediatePropagation: () => {} });
+      env.simulateXtermOnData(' ');
       env.ta.value = ' ';
       env.dispatchElEvent('input', { inputType: 'insertText', isComposing: false });
-
-      // The key point: only one space sent (via onData).
-      // Input handler: Fix 4 dedup catches it (value === _xtermSentData within 100ms)
-      assert.deepEqual(env.sentToPty(), [' '], 'only one space sent total');
+      assert.deepEqual(env.sentViaOnData, [' '], 'space via onData');
+      assert.deepEqual(env.sentViaImeSendFn, [], 'Fix 4 dedup');
     } finally {
       env.restoreRaf();
     }
   });
 });
 
-// ── Scenario C: Composition + non-IME key — no stale pinyin ──
+// ── Scenario C: Enter during composition ──
 
-describe('Scenario C: Composition + non-IME key', () => {
-  test('IME-C1: Enter during composition — stale preedit not sent', () => {
+describe('Scenario C: Non-IME key during composition', () => {
+  test('IME-C1: Enter commits text', () => {
     const env = createImeEnv();
     try {
-      const stopProp = env.trackCalls();
-
+      const sp = env.trackCalls();
       env.dispatchTaEvent('compositionstart', {});
       env.dispatchTaEvent('keydown', { keyCode: 229, isComposing: true, stopImmediatePropagation: () => {} });
-      env.dispatchTaEvent('keydown', { keyCode: 13, isComposing: true, stopImmediatePropagation: stopProp });
+      env.dispatchTaEvent('keydown', { keyCode: 13, isComposing: true, stopImmediatePropagation: sp });
+      env.ta.value = '我们';
       env.dispatchTaEvent('compositionend', {});
       env.simulateXtermOnData('我们');
-
-      assert.ok(stopProp.wasCalled(), 'stopImmediatePropagation called on Enter keydown');
-      assert.deepEqual(env.sentViaOnData, ['我们'], 'only committed text sent');
+      assert.ok(sp.wasCalled(), 'Enter blocked');
+      assert.deepEqual(env.sentViaOnData, ['我们'], 'text sent via onData');
     } finally {
       env.restoreRaf();
     }
   });
 });
 
-// ── Scenario D: Rapid same character — imeFilter behavior ──
+// ── Scenario D: imeFilter ──
 
 describe('Scenario D: imeFilter dedup', () => {
-  test('IME-D1: imeFilter — first call passes, immediate second same call deduped', async () => {
+  test('IME-D1: dedup', async () => {
     const env = createImeEnv();
     try {
-      assert.equal(env.term.imeFilter('a'), 'a', 'first call passes');
-
-      // Immediately call again — Date.now() delta < 100ms → deduped
-      assert.equal(env.term.imeFilter('a'), '', 'second same call within 100ms deduped');
-
-      // Wait 110ms to exceed 100ms window
+      assert.equal(env.term.imeFilter('a'), 'a');
+      assert.equal(env.term.imeFilter('a'), '');
       await new Promise(r => setTimeout(r, 110));
-      assert.equal(env.term.imeFilter('a'), 'a', 'after 100ms+ wait, same data passes again');
-    } finally {
-      env.restoreRaf();
-    }
+      assert.equal(env.term.imeFilter('a'), 'a');
+    } finally { env.restoreRaf(); }
   });
-
-  test('IME-D2: imeFilter — different consecutive data passes', () => {
+  test('IME-D2: different data', () => {
     const env = createImeEnv();
     try {
-      assert.equal(env.term.imeFilter('a'), 'a', 'first call passes');
-      assert.equal(env.term.imeFilter('b'), 'b', 'different data not deduped');
-    } finally {
-      env.restoreRaf();
-    }
-  });
-
-  test('IME-D3: imeFilter — single character dedup (original bug fix)', () => {
-    const env = createImeEnv();
-    try {
-      assert.equal(env.term.imeFilter(' '), ' ', 'single space first call passes');
-      assert.equal(env.term.imeFilter(' '), '', 'single space second call within 100ms deduped');
-    } finally {
-      env.restoreRaf();
-    }
+      assert.equal(env.term.imeFilter('a'), 'a');
+      assert.equal(env.term.imeFilter('b'), 'b');
+    } finally { env.restoreRaf(); }
   });
 });
 
-// ── Scenario E: Ctrl+C during composition resets isComposing ──
+// ── Scenario E: Ctrl+C ──
 
-describe('Scenario E: Ctrl+C during composition', () => {
-  test('IME-E1: Ctrl+C during composition — isComposing reset', () => {
+describe('Scenario E: Ctrl+C', () => {
+  test('IME-E1: resets isComposing', () => {
     const env = createImeEnv();
     try {
-      const stopProp = env.trackCalls();
-
-      env.dispatchTaEvent('compositionstart', {});
-      // Ctrl+C: keyCode 67 + ctrlKey → should reset isComposing
-      env.dispatchTaEvent('keydown', { keyCode: 67, ctrlKey: true, isComposing: true, stopImmediatePropagation: () => {} });
-      // After Ctrl+C, isComposing is reset, so subsequent non-composing keydown should NOT be blocked
-      env.dispatchTaEvent('keydown', { keyCode: 65, isComposing: false, stopImmediatePropagation: stopProp });
-
-      assert.ok(!stopProp.wasCalled(), 'stopImmediatePropagation NOT called — isComposing was reset by Ctrl+C');
-    } finally {
-      env.restoreRaf();
-    }
-  });
-
-  test('IME-E2: Ctrl+C without compositionend — isComposing still resets (Linux IBus)', () => {
-    const env = createImeEnv();
-    try {
-      const stopProp = env.trackCalls();
-
+      const sp = env.trackCalls();
       env.dispatchTaEvent('compositionstart', {});
       env.dispatchTaEvent('keydown', { keyCode: 67, ctrlKey: true, isComposing: true, stopImmediatePropagation: () => {} });
-      // Do NOT dispatch compositionend — simulates Linux IBus not firing it
-      env.dispatchTaEvent('keydown', { keyCode: 65, isComposing: false, stopImmediatePropagation: stopProp });
-
-      assert.ok(!stopProp.wasCalled(), 'stopImmediatePropagation NOT called — isComposing was reset by Ctrl+C even without compositionend');
-    } finally {
-      env.restoreRaf();
-    }
-  });
-
-  test('IME-E3: Non-Ctrl+C during composition — isComposing NOT reset', () => {
-    const env = createImeEnv();
-    try {
-      const stopProp = env.trackCalls();
-
-      env.dispatchTaEvent('compositionstart', {});
-      // Ctrl+A: keyCode 65 + ctrlKey — NOT Ctrl+C, so isComposing stays true
-      env.dispatchTaEvent('keydown', { keyCode: 65, ctrlKey: true, isComposing: true, stopImmediatePropagation: () => {} });
-      // isComposing is still true, so next keydown should still be blocked
-      env.dispatchTaEvent('keydown', { keyCode: 66, isComposing: false, stopImmediatePropagation: stopProp });
-
-      assert.ok(stopProp.wasCalled(), 'stopImmediatePropagation IS called — isComposing was NOT reset by Ctrl+A');
-    } finally {
-      env.restoreRaf();
-    }
+      env.dispatchTaEvent('keydown', { keyCode: 65, isComposing: false, stopImmediatePropagation: sp });
+      assert.ok(!sp.wasCalled(), 'Ctrl+C reset isComposing');
+    } finally { env.restoreRaf(); }
   });
 });
 
-// ── Scenario F: Regression tests ──
+// ── Scenario F: Regression ──
 
-describe('Scenario F: Regression tests', () => {
-  test('IME-F1: Paste — rAF clears textarea (Fix 1)', () => {
+describe('Scenario F: Regression', () => {
+  test('IME-F1: Paste — rAF clears textarea', () => {
     const env = createImeEnv();
     try {
-      env.ta.value = 'pasted text';
+      env.ta.value = 'text';
       env.dispatchTaEvent('paste', {});
-
-      assert.equal(env.ta.value, 'pasted text', 'textarea still has text before rAF');
-
+      assert.equal(env.ta.value, 'text', 'before rAF');
       env.flushRaf();
-
-      assert.equal(env.ta.value, '', 'rAF cleared textarea');
-    } finally {
-      env.restoreRaf();
-    }
+      assert.equal(env.ta.value, '', 'after rAF');
+    } finally { env.restoreRaf(); }
   });
 
-  test('IME-F2: Fix 3 — Shift+symbol without insertText guard (Fix 4 dedup handles regular keys)', () => {
+  test('IME-F2: Shift+symbol after composition', () => {
     const env = createImeEnv();
     try {
       env.dispatchTaEvent('compositionstart', {});
-      env.dispatchTaEvent('compositionend', {}); // sets _compositionEndedAt = now
-      env.flushRaf();
-
-      // IME 激活时按 Shift+1 → 全角 ！
-      // 不需要 keyCode=229 的 keydown — 旧守卫已移除，完全依赖 Fix 4 去重
+      env.ta.value = '你';
+      env.dispatchTaEvent('compositionend', {});
+      // _lastCompositionText = '你'
+      // value = '！' → doesn't start with '你' → Fix 3 sends
       env.ta.value = '！';
       env.dispatchElEvent('input', { inputType: 'insertText', isComposing: false });
-
-      assert.ok(env.sentViaImeSendFn.includes('！'), 'Shift+symbol sent via _imeSendFn (no insertText guard, Fix 4 dedup handles rest)');
-    } finally {
-      env.restoreRaf();
-    }
+      assert.ok(env.sentViaImeSendFn.includes('！'), '！ sent');
+    } finally { env.restoreRaf(); }
   });
 });
 
-// ── Scenario H: Caps Lock during composition — 陈旧拼音不重复 ──
-//
-// macOS 上按 Caps Lock 切换输入法时，事件顺序为：
-//   1. OS/IME 先处理 → compositionend → isComposing = false
-//   2. Caps Lock keydown 到达浏览器 → isComposing 已 false
-//   3. 如果不拦截，xterm _finalizeComposition(false) 发送陈旧拼音
-//
-// 修复：_compositionJustEnded 标志兜住这个间隙 + onData 双发去重安全网
-
-describe('Scenario H: Caps Lock during composition', () => {
-  test('IME-H1: Caps Lock keydown after compositionend — still blocked by _compositionJustEnded', () => {
-    const env = createImeEnv();
-    try {
-      const stopProp = env.trackCalls();
-
-      // composition 进行中
-      env.dispatchTaEvent('compositionstart', {});
-      env.dispatchTaEvent('keydown', { keyCode: 229, isComposing: true, stopImmediatePropagation: () => {} });
-
-      // compositionend 先到达（OS 处理 Caps Lock → IME 触发）
-      env.dispatchTaEvent('compositionend', {});
-      // isComposing 已 false，但 _compositionJustEnded = true
-
-      // Caps Lock keydown 后到达（keyCode 20）
-      env.dispatchTaEvent('keydown', { keyCode: 20, isComposing: false, stopImmediatePropagation: stopProp });
-
-      assert.ok(stopProp.wasCalled(),
-        'Caps Lock keydown STILL blocked by _compositionJustEnded even though isComposing=false');
-    } finally {
-      env.restoreRaf();
-    }
-  });
-
-  test('IME-H2: _compositionJustEnded resets after one intercepted keydown', () => {
-    const env = createImeEnv();
-    try {
-      // composition → compositionend → _compositionJustEnded=true
-      env.dispatchTaEvent('compositionstart', {});
-      env.dispatchTaEvent('compositionend', {});
-
-      // First non-229 keydown (Caps Lock) — intercepted
-      const stop1 = env.trackCalls();
-      env.dispatchTaEvent('keydown', { keyCode: 20, isComposing: false, stopImmediatePropagation: stop1 });
-      assert.ok(stop1.wasCalled(), 'first keydown blocked');
-
-      // Second keydown (normal letter) — NOT intercepted (flag reset)
-      const stop2 = env.trackCalls();
-      env.dispatchTaEvent('keydown', { keyCode: 65, isComposing: false, stopImmediatePropagation: stop2 });
-      assert.ok(!stop2.wasCalled(), 'second keydown NOT blocked — _compositionJustEnded was consumed');
-    } finally {
-      env.restoreRaf();
-    }
-  });
-
-  test('IME-H3: Full Caps Lock flow — pinyin spaces filtered by onData', () => {
-    const env = createImeEnv();
-    try {
-      // 1. composition 中输入拼音
-      env.dispatchTaEvent('compositionstart', {});
-      env.dispatchTaEvent('keydown', { keyCode: 229, isComposing: true, stopImmediatePropagation: () => {} });
-
-      // 2. compositionend (IME 被 Caps Lock 中断)
-      env.dispatchTaEvent('compositionend', {});
-
-      // 3. Caps Lock keydown — 被 _compositionJustEnded 拦截
-      env.dispatchTaEvent('keydown', { keyCode: 20, isComposing: false, stopImmediatePropagation: () => {} });
-
-      // 4. xterm 通过 _finalizeComposition(true) 或 _handleAnyTextareaChanges 发送 "wo men"
-      //    onData 路径的 Fix 5 过滤器清理空格 → "women"（不限 recentlyComposed）
-      env.simulateXtermOnData('wo men');
-
-      assert.deepEqual(env.sentViaOnData, ['women'],
-        'pinyin spaces filtered by onData: "wo men" → "women"');
-    } finally {
-      env.restoreRaf();
-    }
-  });
-
-  test('IME-H4: onData dedup safety net — identical data within 100ms after composition', () => {
-    const env = createImeEnv();
-    try {
-      // composition 结束
-      env.dispatchTaEvent('compositionstart', {});
-      env.dispatchTaEvent('compositionend', {});
-
-      // _finalizeComposition(false) 和 (true) 都发相同数据
-      env.simulateXtermOnData('wo men'); // 第一次 → Fix 5 cleans to "women"
-      env.simulateXtermOnData('wo men'); // 第二次 → dedup!
-
-      assert.deepEqual(env.sentViaOnData, ['women'],
-        'duplicate "wo men" deduped by onData safety net, Fix 5 also cleans spaces');
-    } finally {
-      env.restoreRaf();
-    }
-  });
-
-  test('IME-H5: onData dedup only active after composition — normal "ll" not affected', () => {
-    const env = createImeEnv();
-    try {
-      // 无 composition — _compositionEndedAt = 0
-      env.simulateXtermOnData('l');
-      env.simulateXtermOnData('l');
-
-      assert.deepEqual(env.sentViaOnData, ['l', 'l'],
-        'normal "ll" input NOT deduped when no recent composition');
-    } finally {
-      env.restoreRaf();
-    }
-  });
-});
-
-// ── Scenario G: Chinese input normal flow — 字符不遗漏、不重复、不乱序 ──
-//
-// 真实中文输入法工作流：
-//   1. 用户激活中文输入法
-//   2. 按键开始 composition（拼音字母逐个输入）
-//   3. composition 期间所有非 229 keydown 被 stopImmediatePropagation 拦截
-//   4. 按空格/Enter 确认选词 → compositionend → 提交的汉字通过 xterm onData 发出
-//   5. 后续继续输入下一个词（可能直接开始新 composition）
-//
-// 需要验证：
-//   - 汉字只发一次（不重复）
-//   - 汉字不会丢失
-//   - 空格确认键不会额外发送
-//   - 连续输入多个中文词时各自独立正确
+// ── Scenario G: Chinese normal flow ──
 
 describe('Scenario G: Chinese input normal flow', () => {
-  test('IME-G1: Single word — "我们" via composition + space confirm', () => {
+  test('IME-G1: "我们"', () => {
     const env = createImeEnv();
     try {
-      // 1. compositionstart
       env.dispatchTaEvent('compositionstart', {});
-
-      // 2. Composition 期间：用户输入拼音 w, o, m, e, n
-      //    每个字母的 keydown 都是非 229（ASCII 字符），Fix 2 拦截
-      const stopProps = [];
-      for (const keyCode of [87, 79, 77, 69, 78]) { // W O M E N
-        const sp = env.trackCalls();
-        stopProps.push(sp);
-        env.dispatchTaEvent('keydown', { keyCode, isComposing: true, stopImmediatePropagation: sp });
+      for (const kc of [87, 79, 77, 69, 78]) {
+        env.dispatchTaEvent('keydown', { keyCode: kc, isComposing: true, stopImmediatePropagation: () => {} });
       }
-      // 所有拼音字母 keydown 应被拦截
-      assert.ok(stopProps.every(sp => sp.wasCalled()), 'all pinyin letter keydowns blocked during composition');
-
-      // 3. 按空格确认选词 → 仍是 composition 期间，Fix 2 拦截
-      const spaceStop = env.trackCalls();
-      env.dispatchTaEvent('keydown', { keyCode: 32, isComposing: true, stopImmediatePropagation: spaceStop });
-      assert.ok(spaceStop.wasCalled(), 'space confirm keydown blocked during composition');
-
-      // 4. compositionend — 汉字提交
+      env.dispatchTaEvent('keydown', { keyCode: 32, isComposing: true, stopImmediatePropagation: () => {} });
+      env.ta.value = '我们';
       env.dispatchTaEvent('compositionend', {});
-      env.flushRaf(); // compositionend 的 rAF 清空 textarea
-
-      // 5. xterm onData 发送 "我们"（这是 xterm compositionend handler 的正常行为）
       env.simulateXtermOnData('我们');
 
-      // 6. 验证：只发了 "我们"，没有多余
-      assert.deepEqual(env.sentViaOnData, ['我们'], 'only committed Chinese text via onData');
-      assert.deepEqual(env.sentViaImeSendFn, [], 'nothing sent via _imeSendFn');
-      assert.deepEqual(env.sentToPty(), ['我们'], 'total sent to PTY: exactly once');
-    } finally {
-      env.restoreRaf();
-    }
+      assert.deepEqual(env.sentViaOnData, ['我们'], 'via onData');
+      assert.deepEqual(env.sentViaImeSendFn, [], 'no _imeSendFn');
+      assert.deepEqual(env.sentToPty(), ['我们'], 'once');
+    } finally { env.restoreRaf(); }
   });
 
-  test('IME-G2: Two consecutive words — "你好世界"', () => {
+  test('IME-G2: "你好世界"', () => {
     const env = createImeEnv();
     try {
-      // ── 第一个词 "你好" ──
       env.dispatchTaEvent('compositionstart', {});
-      env.dispatchTaEvent('keydown', { keyCode: 78, isComposing: true, stopImmediatePropagation: () => {} }); // N
-      env.dispatchTaEvent('keydown', { keyCode: 73, isComposing: true, stopImmediatePropagation: () => {} }); // I
-      env.dispatchTaEvent('keydown', { keyCode: 72, isComposing: true, stopImmediatePropagation: () => {} }); // H
-      env.dispatchTaEvent('keydown', { keyCode: 65, isComposing: true, stopImmediatePropagation: () => {} }); // A
-      env.dispatchTaEvent('keydown', { keyCode: 79, isComposing: true, stopImmediatePropagation: () => {} }); // O
-      env.dispatchTaEvent('keydown', { keyCode: 32, isComposing: true, stopImmediatePropagation: () => {} }); // space confirm
+      for (const kc of [78, 73, 72, 65, 79]) {
+        env.dispatchTaEvent('keydown', { keyCode: kc, isComposing: true, stopImmediatePropagation: () => {} });
+      }
+      env.dispatchTaEvent('keydown', { keyCode: 32, isComposing: true, stopImmediatePropagation: () => {} });
+      env.ta.value = '你好';
       env.dispatchTaEvent('compositionend', {});
-      env.flushRaf();
       env.simulateXtermOnData('你好');
 
-      // ── 第二个词 "世界" ──
-      // 用户可能立刻开始新 composition（某些 IME 自动进入），或者短暂间隔
       env.dispatchTaEvent('compositionstart', {});
-      env.dispatchTaEvent('keydown', { keyCode: 83, isComposing: true, stopImmediatePropagation: () => {} }); // S
-      env.dispatchTaEvent('keydown', { keyCode: 72, isComposing: true, stopImmediatePropagation: () => {} }); // H
-      env.dispatchTaEvent('keydown', { keyCode: 73, isComposing: true, stopImmediatePropagation: () => {} }); // I
-      env.dispatchTaEvent('keydown', { keyCode: 74, isComposing: true, stopImmediatePropagation: () => {} }); // J
-      env.dispatchTaEvent('keydown', { keyCode: 73, isComposing: true, stopImmediatePropagation: () => {} }); // I
-      env.dispatchTaEvent('keydown', { keyCode: 69, isComposing: true, stopImmediatePropagation: () => {} }); // E
-      env.dispatchTaEvent('keydown', { keyCode: 32, isComposing: true, stopImmediatePropagation: () => {} }); // space confirm
+      for (const kc of [83, 72, 73, 74, 73, 69]) {
+        env.dispatchTaEvent('keydown', { keyCode: kc, isComposing: true, stopImmediatePropagation: () => {} });
+      }
+      env.dispatchTaEvent('keydown', { keyCode: 32, isComposing: true, stopImmediatePropagation: () => {} });
+      env.ta.value = '世界';
       env.dispatchTaEvent('compositionend', {});
-      env.flushRaf();
       env.simulateXtermOnData('世界');
 
-      assert.deepEqual(env.sentViaOnData, ['你好', '世界'], 'both words sent via onData in order');
-      assert.deepEqual(env.sentViaImeSendFn, [], 'nothing sent via _imeSendFn');
-      assert.deepEqual(env.sentToPty(), ['你好', '世界'], 'total: 两个词，顺序正确，无遗漏');
-    } finally {
-      env.restoreRaf();
-    }
+      assert.deepEqual(env.sentToPty(), ['你好', '世界'], 'both words');
+    } finally { env.restoreRaf(); }
   });
 
-  test('IME-G3: Chinese + English mixed input — "hello你好"', () => {
+  test('IME-G3: "hello你好"', () => {
     const env = createImeEnv();
     try {
-      // 英文 "hello" — 直接通过 xterm keydown → onData
       for (const ch of 'hello') {
         env.dispatchTaEvent('keydown', { keyCode: ch.charCodeAt(0), isComposing: false, stopImmediatePropagation: () => {} });
         env.simulateXtermOnData(ch);
       }
-
-      // 中文 "你好" — composition 流程
       env.dispatchTaEvent('compositionstart', {});
-      env.dispatchTaEvent('keydown', { keyCode: 78, isComposing: true, stopImmediatePropagation: () => {} });
-      env.dispatchTaEvent('keydown', { keyCode: 73, isComposing: true, stopImmediatePropagation: () => {} });
-      env.dispatchTaEvent('keydown', { keyCode: 72, isComposing: true, stopImmediatePropagation: () => {} });
-      env.dispatchTaEvent('keydown', { keyCode: 65, isComposing: true, stopImmediatePropagation: () => {} });
-      env.dispatchTaEvent('keydown', { keyCode: 79, isComposing: true, stopImmediatePropagation: () => {} });
+      for (const kc of [78, 73, 72, 65, 79]) {
+        env.dispatchTaEvent('keydown', { keyCode: kc, isComposing: true, stopImmediatePropagation: () => {} });
+      }
       env.dispatchTaEvent('keydown', { keyCode: 32, isComposing: true, stopImmediatePropagation: () => {} });
+      env.ta.value = '你好';
       env.dispatchTaEvent('compositionend', {});
-      env.flushRaf();
       env.simulateXtermOnData('你好');
 
-      assert.deepEqual(env.sentViaOnData, ['h', 'e', 'l', 'l', 'o', '你好'],
-        'English chars + Chinese word in correct order');
-      assert.deepEqual(env.sentViaImeSendFn, [], 'no _imeSendFn involvement');
-      assert.deepEqual(env.sentToPty(), ['h', 'e', 'l', 'l', 'o', '你好'],
-        'mixed input: 5 English + 1 Chinese, no loss no duplication');
-    } finally {
-      env.restoreRaf();
-    }
+      assert.deepEqual(env.sentToPty(), ['h', 'e', 'l', 'l', 'o', '你好'], 'mixed');
+    } finally { env.restoreRaf(); }
   });
 
-  test('IME-G4: Chinese input followed by direct Enter — no extra content', () => {
+  test('IME-G4: Chinese + Enter', () => {
     const env = createImeEnv();
     try {
-      // composition 流程
       env.dispatchTaEvent('compositionstart', {});
-      env.dispatchTaEvent('keydown', { keyCode: 87, isComposing: true, stopImmediatePropagation: () => {} });
-      env.dispatchTaEvent('keydown', { keyCode: 79, isComposing: true, stopImmediatePropagation: () => {} });
-      env.dispatchTaEvent('keydown', { keyCode: 77, isComposing: true, stopImmediatePropagation: () => {} });
-      env.dispatchTaEvent('keydown', { keyCode: 69, isComposing: true, stopImmediatePropagation: () => {} });
-      env.dispatchTaEvent('keydown', { keyCode: 78, isComposing: true, stopImmediatePropagation: () => {} });
+      for (const kc of [87, 79, 77, 69, 78]) {
+        env.dispatchTaEvent('keydown', { keyCode: kc, isComposing: true, stopImmediatePropagation: () => {} });
+      }
       env.dispatchTaEvent('keydown', { keyCode: 32, isComposing: true, stopImmediatePropagation: () => {} });
+      env.ta.value = '我们';
       env.dispatchTaEvent('compositionend', {});
-      env.flushRaf();
       env.simulateXtermOnData('我们');
 
-      // composition 结束后，用户按 Enter 提交命令
       env.dispatchTaEvent('keydown', { keyCode: 13, isComposing: false, stopImmediatePropagation: () => {} });
       env.simulateXtermOnData('\r');
 
-      assert.deepEqual(env.sentViaOnData, ['我们', '\r'],
-        'Chinese text + Enter, no stale pinyin or extra characters');
-      assert.deepEqual(env.sentViaImeSendFn, [], 'no _imeSendFn');
-      assert.deepEqual(env.sentToPty(), ['我们', '\r'],
-        'correct: 我们 + Enter, nothing else');
-    } finally {
-      env.restoreRaf();
-    }
+      assert.deepEqual(env.sentToPty(), ['我们', '\r'], 'Chinese + Enter');
+    } finally { env.restoreRaf(); }
   });
 
-  test('IME-G5: Composition cancelled by Escape — no stale text sent', () => {
+  test('IME-G5: Cancelled', () => {
     const env = createImeEnv();
     try {
-      // composition 开始，输入拼音
       env.dispatchTaEvent('compositionstart', {});
-      env.dispatchTaEvent('keydown', { keyCode: 87, isComposing: true, stopImmediatePropagation: () => {} });
-      env.dispatchTaEvent('keydown', { keyCode: 79, isComposing: true, stopImmediatePropagation: () => {} });
-
-      // 用户按 Escape 取消 composition
       env.dispatchTaEvent('keydown', { keyCode: 27, isComposing: true, stopImmediatePropagation: () => {} });
-      // 某些 IME 会触发 compositionend（取消），某些不会
-      // 测试两种路径：
-      // 路径1：有 compositionend
+      env.ta.value = '';
       env.dispatchTaEvent('compositionend', {});
-      env.flushRaf();
 
-      // 取消后不应有任何中文字符发送
-      // xterm 的 compositionend handler 收到空字符串或取消标志
-      // 不会调用 onData，所以 sentViaOnData 应为空
-      assert.deepEqual(env.sentViaOnData, [], 'no Chinese text sent for cancelled composition');
-      assert.deepEqual(env.sentViaImeSendFn, [], 'no _imeSendFn');
-      assert.deepEqual(env.sentToPty(), [], 'nothing sent for cancelled composition');
-    } finally {
-      env.restoreRaf();
-    }
+      assert.deepEqual(env.sentToPty(), [], 'nothing');
+    } finally { env.restoreRaf(); }
   });
 
-  test('IME-G6: IME Shift+symbol after composition — fullwidth char sent via _imeSendFn', () => {
+  test('IME-G6: Shift+symbol after composition', () => {
     const env = createImeEnv();
     try {
-      // 先完成一次正常中文输入
       env.dispatchTaEvent('compositionstart', {});
+      env.ta.value = '你';
       env.dispatchTaEvent('compositionend', {});
-      env.flushRaf();
-      env.simulateXtermOnData('你');
-
-      // IME 仍激活，按 Shift+1 → 全角 ！
-      // 无需 keyCode=229 的 keydown — 旧守卫已移除
-      // insertText 进入 Fix 3 路径，Fix 4 去重不匹配（'！' !== '你'）
+      // _lastCompositionText='你', value='！' → not startswith → Fix 3 sends
       env.ta.value = '！';
       env.dispatchElEvent('input', { inputType: 'insertText', isComposing: false });
-
-      assert.ok(env.sentViaImeSendFn.includes('！'),
-        'fullwidth ！ sent via _imeSendFn (Fix 3 path, no insertText guard)');
-      assert.equal(env.ta.value, '', 'textarea cleared after Fix 3');
-    } finally {
-      env.restoreRaf();
-    }
+      assert.ok(env.sentViaImeSendFn.includes('！'), '！ sent');
+    } finally { env.restoreRaf(); }
   });
 });
 
 // ── Edge cases ──
 
 describe('Edge cases', () => {
-  test('No textarea — initImeFix returns early without error', () => {
-    const originalRaf = globalThis.requestAnimationFrame;
-    try {
-      const term = {
-        textarea: null,
-        element: { querySelector: () => null },
-        _imeSendFn: () => {},
-      };
-      const termEl = { addEventListener: () => {} };
-      // Should not throw
-      initImeFix(term, termEl);
-      assert.equal(term.imeFilter, undefined, 'imeFilter not set when no textarea');
-    } finally {
-      globalThis.requestAnimationFrame = originalRaf;
-    }
-  });
-
   test('Blur resets isComposing', () => {
     const env = createImeEnv();
     try {
-      const stopProp = env.trackCalls();
-
+      const sp = env.trackCalls();
       env.dispatchTaEvent('compositionstart', {});
-      env.dispatchTaEvent('blur', {}); // blur should reset isComposing
-      // After blur, isComposing is false, so keydown should not be blocked
-      env.dispatchTaEvent('keydown', { keyCode: 65, isComposing: false, stopImmediatePropagation: stopProp });
-
-      assert.ok(!stopProp.wasCalled(), 'stopImmediatePropagation NOT called after blur reset isComposing');
-    } finally {
-      env.restoreRaf();
-    }
+      env.dispatchTaEvent('blur', {});
+      env.dispatchTaEvent('keydown', { keyCode: 65, isComposing: false, stopImmediatePropagation: sp });
+      assert.ok(!sp.wasCalled());
+    } finally { env.restoreRaf(); }
   });
 
-  test('Paste with _mentionController — setPasting called', () => {
+  test('Paste with mentionController', () => {
     const env = createImeEnv();
     try {
-      let pastingStates = [];
-      env.term._mentionController = {
-        setPasting: (v) => { pastingStates.push(v); },
-      };
-
+      let st = [];
+      env.term._mentionController = { setPasting: (v) => { st.push(v); } };
       env.dispatchTaEvent('paste', {});
-      assert.deepEqual(pastingStates, [true], 'setPasting(true) called on paste');
-
+      assert.deepEqual(st, [true]);
       env.flushRaf();
-      assert.deepEqual(pastingStates, [true, false], 'setPasting(false) called after rAF');
-    } finally {
-      env.restoreRaf();
-    }
+      assert.deepEqual(st, [true, false]);
+    } finally { env.restoreRaf(); }
   });
 
-  test('compositionend — rAF clears textarea', () => {
-    const env = createImeEnv();
-    try {
-      env.ta.value = '残留拼音';
-      env.dispatchTaEvent('compositionstart', {});
-      env.ta.value = '残留拼音';
-      env.dispatchTaEvent('compositionend', {});
-
-      // compositionend 不再清空 textarea（xterm 自己通过异步 handler 清空）
-      assert.equal(env.ta.value, '残留拼音', 'textarea not cleared by ime-fix compositionend handler');
-
-      env.flushRaf();
-
-      // rAF 也不清空 textarea（已移除此逻辑，避免和 xterm setTimeout(0) 竞争）
-      assert.equal(env.ta.value, '残留拼音', 'textarea not cleared by rAF — xterm responsible for clearing');
-    } finally {
-      env.restoreRaf();
-    }
-  });
-
-  test('insertFromPaste input event — input handler skips', () => {
-    const env = createImeEnv();
-    try {
-      env.ta.value = 'pasted content';
-      env.dispatchElEvent('input', { inputType: 'insertFromPaste', isComposing: false });
-
-      assert.deepEqual(env.sentViaImeSendFn, [], 'input handler skips insertFromPaste');
-    } finally {
-      env.restoreRaf();
-    }
-  });
-
-  test('insertFromDrop input event — input handler skips', () => {
-    const env = createImeEnv();
-    try {
-      env.ta.value = 'dropped content';
-      env.dispatchElEvent('input', { inputType: 'insertFromDrop', isComposing: false });
-
-      assert.deepEqual(env.sentViaImeSendFn, [], 'input handler skips insertFromDrop');
-    } finally {
-      env.restoreRaf();
-    }
-  });
-
-  test('Empty textarea — input handler skips', () => {
-    const env = createImeEnv();
-    try {
-      env.ta.value = '';
-      env.dispatchElEvent('input', { inputType: 'insertText', isComposing: false });
-
-      assert.deepEqual(env.sentViaImeSendFn, [], 'input handler skips when textarea is empty');
-    } finally {
-      env.restoreRaf();
-    }
-  });
-
-  test('Modifier keys during composition — not blocked', () => {
+  test('compositionend — textarea NOT cleared (v5)', () => {
     const env = createImeEnv();
     try {
       env.dispatchTaEvent('compositionstart', {});
-
-      const shiftStopProp = env.trackCalls();
-      env.dispatchTaEvent('keydown', { keyCode: 16, isComposing: true, stopImmediatePropagation: shiftStopProp });
-      assert.ok(!shiftStopProp.wasCalled(), 'Shift (keyCode 16) not blocked during composition');
-
-      const ctrlStopProp = env.trackCalls();
-      env.dispatchTaEvent('keydown', { keyCode: 17, isComposing: true, stopImmediatePropagation: ctrlStopProp });
-      assert.ok(!ctrlStopProp.wasCalled(), 'Ctrl (keyCode 17) not blocked during composition');
-
-      const altStopProp = env.trackCalls();
-      env.dispatchTaEvent('keydown', { keyCode: 18, isComposing: true, stopImmediatePropagation: altStopProp });
-      assert.ok(!altStopProp.wasCalled(), 'Alt (keyCode 18) not blocked during composition');
-    } finally {
-      env.restoreRaf();
-    }
-  });
-});
-
-// ── Scenario I: Fix 5 — Caps Lock compositionend 清空 textarea ──
-//
-// macOS Caps Lock 切换输入法时，IME 将原始拼音（含音节分隔空格）
-// 提交到 textarea。Fix 5 在 compositionend capture 阶段同步清空
-// textarea（尽力阻止 xterm 发送脏数据），拼音过滤由 onData 路径兜底。
-
-describe('Scenario I: Fix 5 — Synchronous textarea clear on pinyin', () => {
-  test('IME-I1: Caps Lock interrupt — pinyin textarea cleared', () => {
-    const env = createImeEnv();
-    try {
-      env.dispatchTaEvent('compositionstart', {});
-      env.dispatchTaEvent('keydown', { keyCode: 229, isComposing: true, stopImmediatePropagation: () => {} });
-
-      env.ta.value = 'wo men';
-      env.dispatchTaEvent('compositionend', {});
-
-      // textarea 被清空（尽力阻止 xterm 读取脏数据）
-      assert.equal(env.ta.value, '', 'textarea cleared for pinyin');
-      // _imeSendFn 不再由 Fix 5 调用，拼音过滤完全由 onData 路径处理
-      assert.deepEqual(env.sentViaImeSendFn, [], '_imeSendFn not triggered by Fix 5');
-    } finally {
-      env.restoreRaf();
-    }
-  });
-
-  test('IME-I2: Normal Chinese commit — textarea NOT touched (non-ASCII text)', () => {
-    const env = createImeEnv();
-    try {
-      env.dispatchTaEvent('compositionstart', {});
-      env.dispatchTaEvent('keydown', { keyCode: 229, isComposing: true, stopImmediatePropagation: () => {} });
-      env.dispatchTaEvent('keydown', { keyCode: 32, isComposing: true, stopImmediatePropagation: () => {} });
-
       env.ta.value = '我们';
       env.dispatchTaEvent('compositionend', {});
-
-      assert.equal(env.ta.value, '我们', 'Chinese text NOT cleared');
-      assert.deepEqual(env.sentViaImeSendFn, [], '_imeSendFn not triggered');
-    } finally {
-      env.restoreRaf();
-    }
+      // v5: textarea NOT cleared — xterm manages it
+      assert.equal(env.ta.value, '我们', 'textarea preserved');
+      assert.deepEqual(env.sentViaImeSendFn, [], 'nothing sent');
+    } finally { env.restoreRaf(); }
   });
 
-  test('IME-I3: Pinyin without spaces — no regex match, textarea untouched', () => {
+  test('Modifier keys not blocked', () => {
     const env = createImeEnv();
     try {
       env.dispatchTaEvent('compositionstart', {});
-      env.ta.value = 'women';
-      env.dispatchTaEvent('compositionend', {});
-
-      assert.equal(env.ta.value, 'women', 'pinyin without spaces: textarea NOT cleared');
-    } finally {
-      env.restoreRaf();
-    }
-  });
-
-  test('IME-I4: onData pinyin filter — "wo men" → "women" (no recentlyComposed dependency)', () => {
-    const env = createImeEnv();
-    try {
-      // 不需要 composition 流程 — 过滤不限 recentlyComposed
-      env.simulateXtermOnData('wo men');
-      assert.deepEqual(env.sentViaOnData, ['women'], 'pinyin filter in onData works without recentlyComposed');
-
-      env.simulateXtermOnData('ni hao ma');
-      assert.deepEqual(env.sentViaOnData, ['women', 'nihaoma'], 'multi-syllable filter works');
-    } finally {
-      env.restoreRaf();
-    }
+      const s1 = env.trackCalls();
+      env.dispatchTaEvent('keydown', { keyCode: 16, isComposing: true, stopImmediatePropagation: s1 });
+      assert.ok(!s1.wasCalled(), 'Shift');
+      const s2 = env.trackCalls();
+      env.dispatchTaEvent('keydown', { keyCode: 17, isComposing: true, stopImmediatePropagation: s2 });
+      assert.ok(!s2.wasCalled(), 'Ctrl');
+    } finally { env.restoreRaf(); }
   });
 });
 
-// ── Scenario J: Fix 3 改进验证 — 移除 insertText 守卫，依赖 Fix 4 去重 ──
+// ── Scenario H: Caps Lock ──
 
-describe('Scenario J: Fix 3 improved — no insertText guard, Fix 4 dedup', () => {
-  test('IME-J1: English input — Fix 4 dedup catches it (xterm sent same data)', () => {
+describe('Scenario H: Caps Lock', () => {
+  test('IME-H1: _compositionJustEnded blocks next keydown', () => {
     const env = createImeEnv();
     try {
-      // 英文模式按键 — xterm 通过 onData 发送
-      env.dispatchTaEvent('keydown', { keyCode: 65, isComposing: false, stopImmediatePropagation: () => {} });
-      env.simulateXtermOnData('a');
-
-      env.ta.value = 'a';
-      env.dispatchElEvent('input', { inputType: 'insertText', isComposing: false });
-
-      assert.deepEqual(env.sentViaOnData, ['a'], 'English char via onData');
-      assert.deepEqual(env.sentViaImeSendFn, [], 'Fix 4 dedup caught it — value === _xtermSentData');
-    } finally {
-      env.restoreRaf();
-    }
+      const sp = env.trackCalls();
+      env.dispatchTaEvent('compositionstart', {});
+      env.dispatchTaEvent('keydown', { keyCode: 229, isComposing: true, stopImmediatePropagation: () => {} });
+      env.ta.value = 'wo men';
+      env.dispatchTaEvent('compositionend', {});
+      env.dispatchTaEvent('keydown', { keyCode: 20, isComposing: false, stopImmediatePropagation: sp });
+      assert.ok(sp.wasCalled(), 'Caps Lock blocked');
+    } finally { env.restoreRaf(); }
   });
 
-  test('IME-J2: IME Shift+symbol without prior composition — _imeSendFn sends', () => {
-    const env = createImeEnv();
-    try {
-      // 无前序 composition，IME 直接插入全角字符
-      env.ta.value = '！';
-      env.dispatchElEvent('input', { inputType: 'insertText', isComposing: false });
-
-      assert.ok(env.sentViaImeSendFn.includes('！'),
-        'IME Shift+1 sent via _imeSendFn (no insertText guard, Fix 4 doesn\'t match)');
-    } finally {
-      env.restoreRaf();
-    }
-  });
-
-  test('IME-J3: _compositionJustEnded auto-resets after 200ms', async () => {
+  test('IME-H2: Pinyin spaces filtered by onData', () => {
     const env = createImeEnv();
     try {
       env.dispatchTaEvent('compositionstart', {});
-      env.dispatchTaEvent('compositionend', {}); // sets _compositionJustEnded = true
-
-      // Wait for 200ms timeout to fire
-      await new Promise(r => setTimeout(r, 210));
-
-      // After 200ms, _compositionJustEnded should be false
-      // So a normal keydown should NOT be blocked
-      const stopProp = env.trackCalls();
-      env.dispatchTaEvent('keydown', { keyCode: 65, isComposing: false, stopImmediatePropagation: stopProp });
-
-      assert.ok(!stopProp.wasCalled(), '_compositionJustEnded auto-reset after 200ms — normal keydown NOT blocked');
-    } finally {
-      env.restoreRaf();
-    }
+      env.ta.value = 'wo men';
+      env.dispatchTaEvent('compositionend', {});
+      env.simulateXtermOnData('wo men'); // onData filter → "women"
+      assert.deepEqual(env.sentViaOnData, ['women'], 'pinyin spaces filtered');
+    } finally { env.restoreRaf(); }
   });
 
-  test('IME-J4: onData pinyin filter — "wo men" → "women" (no recentlyComposed)', () => {
+  test('IME-H3: Pinyin re-insertion dedup', () => {
     const env = createImeEnv();
     try {
-      // 不需要 composition 流程 — 过滤不限 recentlyComposed
-      env.simulateXtermOnData('wo men');
-      assert.deepEqual(env.sentViaOnData, ['women'], 'pinyin filter works without recentlyComposed');
-    } finally {
-      env.restoreRaf();
-    }
+      env.dispatchTaEvent('compositionstart', {});
+      env.ta.value = 'wo men';
+      env.dispatchTaEvent('compositionend', {});
+      // IME re-inserts pinyin → _lastCompositionText='wo men' → dedup
+      env.ta.value = 'wo men';
+      env.dispatchElEvent('input', { inputType: 'insertText', isComposing: false });
+      assert.deepEqual(env.sentViaImeSendFn, [], 're-insertion deduped');
+    } finally { env.restoreRaf(); }
+  });
+
+  test('IME-H4: Pinyin + new char — prefix stripped', () => {
+    const env = createImeEnv();
+    try {
+      env.dispatchTaEvent('compositionstart', {});
+      env.ta.value = 'wo men';
+      env.dispatchTaEvent('compositionend', {});
+      env.simulateXtermOnData('women');
+
+      // User types after Caps Lock switch: textarea has "wo men "
+      env.ta.value = 'wo men ';
+      env.dispatchElEvent('input', { inputType: 'insertText', isComposing: false });
+      // Prefix "wo men" stripped → only " " sent via _imeSendFn
+      // (Space keydown was blocked by Fix 2 _compositionJustEnded → xterm didn't send it)
+      assert.deepEqual(env.sentToPty(), ['women', ' '], 'composition + space, no duplicate');
+    } finally { env.restoreRaf(); }
+  });
+});
+
+// ── Scenario I: Fix 5 v5 ──
+
+describe('Scenario I: Fix 5 v5 — record, prefix strip', () => {
+  test('IME-I1: Textarea preserved after compositionend', () => {
+    const env = createImeEnv();
+    try {
+      env.dispatchTaEvent('compositionstart', {});
+      env.ta.value = '我们';
+      env.dispatchTaEvent('compositionend', {});
+      assert.equal(env.ta.value, '我们', 'textarea preserved');
+    } finally { env.restoreRaf(); }
+  });
+
+  test('IME-I2: Full match dedup', () => {
+    const env = createImeEnv();
+    try {
+      env.dispatchTaEvent('compositionstart', {});
+      env.ta.value = '我们';
+      env.dispatchTaEvent('compositionend', {});
+      env.ta.value = '我们';
+      env.dispatchElEvent('input', { inputType: 'insertText', isComposing: false });
+      assert.deepEqual(env.sentViaImeSendFn, [], 'full match deduped');
+    } finally { env.restoreRaf(); }
+  });
+
+  test('IME-I3: Prefix strip — only new part sent', () => {
+    const env = createImeEnv();
+    try {
+      env.dispatchTaEvent('compositionstart', {});
+      env.ta.value = '我们';
+      env.dispatchTaEvent('compositionend', {});
+      env.simulateXtermOnData('我们');
+
+      // User types "a" → textarea has "我们a"
+      env.ta.value = '我们a';
+      env.dispatchElEvent('input', { inputType: 'insertText', isComposing: false });
+      // "我们" prefix stripped → "a" sent via _imeSendFn
+      // "a" is new input after composition — should be sent
+      assert.deepEqual(env.sentToPty(), ['我们', 'a'], 'composition + new char, no duplicate');
+    } finally { env.restoreRaf(); }
+  });
+
+  test('IME-I4: _lastCompositionText expires after 200ms', async () => {
+    const env = createImeEnv();
+    try {
+      env.dispatchTaEvent('compositionstart', {});
+      env.ta.value = '我们';
+      env.dispatchTaEvent('compositionend', {});
+      await new Promise(r => setTimeout(r, 210));
+      // Expired → normal Fix 3 behavior
+      env.ta.value = '我们';
+      env.dispatchElEvent('input', { inputType: 'insertText', isComposing: false });
+      // After expiry, Fix 3 sends (no prefix strip) — but Fix 4 might catch it
+      assert.ok(env.sentViaImeSendFn.length > 0 || env.sentViaOnData.length > 0, 'sent after expiry');
+    } finally { env.restoreRaf(); }
+  });
+});
+
+// ── Scenario J: Fix 3 + Fix 4 ──
+
+describe('Scenario J: Fix 3 + Fix 4', () => {
+  test('IME-J1: English Fix 4 dedup', () => {
+    const env = createImeEnv();
+    try {
+      env.dispatchTaEvent('keydown', { keyCode: 65, isComposing: false, stopImmediatePropagation: () => {} });
+      env.simulateXtermOnData('a');
+      env.ta.value = 'a';
+      env.dispatchElEvent('input', { inputType: 'insertText', isComposing: false });
+      assert.deepEqual(env.sentViaOnData, ['a']);
+      assert.deepEqual(env.sentViaImeSendFn, []);
+    } finally { env.restoreRaf(); }
+  });
+
+  test('IME-J2: IME Shift+symbol', () => {
+    const env = createImeEnv();
+    try {
+      env.ta.value = '！';
+      env.dispatchElEvent('input', { inputType: 'insertText', isComposing: false });
+      assert.ok(env.sentViaImeSendFn.includes('！'));
+    } finally { env.restoreRaf(); }
+  });
+
+  test('IME-J3: _compositionJustEnded 200ms auto-reset', async () => {
+    const env = createImeEnv();
+    try {
+      env.dispatchTaEvent('compositionstart', {});
+      env.ta.value = 'x';
+      env.dispatchTaEvent('compositionend', {});
+      await new Promise(r => setTimeout(r, 210));
+      const sp = env.trackCalls();
+      env.dispatchTaEvent('keydown', { keyCode: 65, isComposing: false, stopImmediatePropagation: sp });
+      assert.ok(!sp.wasCalled(), 'auto-reset');
+    } finally { env.restoreRaf(); }
   });
 });

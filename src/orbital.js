@@ -388,6 +388,7 @@ export class OrbitalController {
           `<div class="np-backend-row">` +
             `<select id="npBackend" class="np-select">${backendOptionsHtml}</select>` +
           `</div>` +
+          `<div id="npInstallHint" class="np-hint" style="display:none"></div>` +
           `<label class="np-label">项目目录</label>` +
           `<div class="np-dir-row">` +
             `<input type="text" id="npDir" class="np-input np-mono" placeholder="${home}/my-project" autocomplete="off" spellcheck="false">` +
@@ -446,11 +447,20 @@ export class OrbitalController {
     });
 
     // Confirm button state — also check that selected backend is installed
+    // Show install hint when uninstalled backend is selected
+    const installHintEl = overlay.querySelector('#npInstallHint');
     const updateConfirmState = () => {
       const name = (nameInput.value || '').trim();
       const selBackend = backendSelect.value;
       const beInfo = backends.find(b => b.id === selBackend);
-      confirmBtn.disabled = !name || (beInfo && !beInfo.installed);
+      const notInstalled = beInfo && !beInfo.installed;
+      confirmBtn.disabled = !name || notInstalled;
+      if (notInstalled && beInfo.install_hint) {
+        installHintEl.innerHTML = `📦 安装方式: <span class="np-mono">${esc(beInfo.install_hint)}</span>`;
+        installHintEl.style.display = '';
+      } else {
+        installHintEl.style.display = 'none';
+      }
     };
     updateConfirmState();
 

@@ -127,19 +127,81 @@ pub fn resolve_or_default(id: &str) -> &'static BackendProfile {
 // ── Detection ─────────────────────────────────────────────────────
 
 /// Detect which backends are installed by running `which <cmd>` for each profile.
-/// Returns (profile, is_installed) pairs.
+///
+/// Uses the full PATH (resolved from user shell) instead of the GUI process PATH,
+/// because macOS GUI apps don't inherit the user's shell PATH — they only get
+/// `/usr/bin:/bin:/usr/sbin:/sbin`. This causes `which` to miss backends installed
+/// in `~/.local/bin`, `/opt/homebrew/bin`, nvm/fnm paths, etc.
+///
+/// The PATH resolution logic mirrors `pty::resolve_full_path()`.
 pub fn detect_installed() -> Vec<(&'static BackendProfile, bool)> {
+    // Resolve full PATH from user shell (same strategy as pty spawn)
+    let resolved_path = resolve_detection_path();
+
     PROFILES
         .iter()
         .map(|p| {
             let found = std::process::Command::new("which")
                 .arg(p.cmd)
+                .env("PATH", &resolved_path)
                 .output()
                 .map(|o| o.status.success())
                 .unwrap_or(false);
             (p, found)
         })
         .collect()
+}
+
+/// Resolve the full PATH for backend detection.
+///
+/// On macOS, GUI apps launched from Dock/Finder get a minimal PATH
+/// (`/usr/bin:/bin:/usr/sbin:/sbin`). Backends like `opencode`, `codex`, `claude`
+/// are typically installed in user directories (`~/.local/bin`, `/opt/homebrew/bin`,
+/// nvm/fnm bun paths, etc.) that are only in the user's shell PATH.
+///
+/// Strategy (mirrors `pty::resolve_full_path()`):
+/// 1. Try `$SHELL -l -i -c 'echo $PATH'` (login + interactive → sources .zshrc)
+/// 2. Try `$SHELL -l -c 'echo $PATH'` (login only → sources .zprofile)
+/// 3. Fallback: parent PATH + common user directories
+/// 4. Always ensure `~/.local/bin` is in PATH
+fn resolve_detection_path() -> String {
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/Users/Shared".to_string());
+    let parent_path = std::env::var("PATH").unwrap_or_default();
+
+    // Try login + interactive shell (sources .zshrc → includes nvm/fnm/bun etc.)
+    for args in &[
+        &["-l", "-i", "-c", "echo $PATH"][..],
+        &["-l", "-c", "echo $PATH"],
+    ] {
+        if let Ok(output) = std::process::Command::new(&shell).args(*args).output() {
+            if output.status.success() {
+                let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !path.is_empty() && path.contains('/') {
+                    return ensure_local_bin(&path, &home);
+                }
+            }
+        }
+    }
+
+    // Fallback: parent PATH + common user directories
+    let fallback = format!(
+        "{home}/.local/bin:{home}/.bun/bin:{home}/.icode/bin:{home}/.cargo/bin:\
+         {home}/bin:/opt/homebrew/bin:/usr/local/bin:{parent_path}",
+        home = home,
+        parent_path = parent_path
+    );
+    ensure_local_bin(&fallback, &home)
+}
+
+/// Ensure PATH includes $HOME/.local/bin (claude's default install location).
+fn ensure_local_bin(path: &str, home: &str) -> String {
+    let local_bin = format!("{home}/.local/bin", home = home);
+    if path.split(':').any(|p| p == local_bin) {
+        path.to_string()
+    } else {
+        format!("{local_bin}:{path}")
+    }
 }
 
 // ── IPC serializable type ─────────────────────────────────────────

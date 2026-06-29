@@ -53,31 +53,37 @@
 //
 // 修复 3 改进: 移除 insertText 条件守卫，依赖 Fix 4 去重
 //   根因：旧的 recentlyComposed 窗口守卫和 lastKeyDownCode 判断都不可靠。
-//         recentlyComposed 300ms 过期后丢弃 IME 直接插入的字符；
-//         lastKeyDownCode 在 IME 直接插入时 keyCode 不一定是 229
-//         （如 Shift+1 的 keyCode 可能是 49 而非 229），导致误判。
-//   修复：完全移除 insertText 条件守卫。对于 xterm keydown 已处理的按键，
-//         onData 回调会先于 input 事件更新 _xtermSentData，
-//         Fix 4 的 dedup 检查（value === _xtermSentData within 100ms）
-//         能可靠地跳过重复数据。对于 IME 直接插入（xterm 未处理），
-//         _xtermSentData 不匹配，Fix 3 正确发送。
+//   修复：完全移除 insertText 条件守卫。依赖 Fix 4 的 _xtermSentData 去重。
 //
-// 修复 5: Caps Lock 中断 composition 时阻止 xterm 发送脏拼音
-//   根因：Caps Lock 切换输入法时，IME 将原始拼音（含音节分隔空格如 "wo men"）
-//         提交到 textarea。xterm 的 compositionend handler 通过 setTimeout(0)
-//         异步读取 textarea 发送这些文本 → 终端收到 "wo men" 而非 "women"。
-//         尝试用 queueMicrotask 在 setTimeout 之前清理 textarea 在 Tauri WebView
-//         中不可靠（microtask 与 macrotask 时序不一致）。
-//   修复：在 compositionend capture 阶段（先于 xterm handler），同步检测 textarea
-//         是否为纯 ASCII 字母数字+空格（即原始拼音提交）。若是，立即清空 textarea
-//         并通过 _imeSendFn 发送清理后的拼音（去除 IME 音节分隔空格）。
-//         xterm 的 setTimeout(0) 后读到空 textarea → 发送空字符串 → 不发送。
-//         正常中文提交（textarea 含非 ASCII 字符）不受影响。
+// 修复 5: compositionend 后记录组合文本，Fix 3 剥离前缀防重复
+//   根因：compositionend 后 textarea 残留已提交的组合文本。用户后续
+//         按键触发 input 事件时，Fix 3 读到残留文本+新字符，整串发送 →
+//         重复输出。例：输入"我们"后按空格 → textarea 有"我们 " →
+//         Fix 3 发送"我们 " → 终端显示"我们我们 "。
+//
+//   错误方案尝试：
+//     v2: 清空 textarea + 手动发送 → xterm 也发送 → 双重输出
+//     v3: 清空 textarea 不发送 → xterm 的 _handleAnyTextareaChanges()
+//         检测到 textarea 从有内容变空，认为用户删除了所有文字 →
+//         发退格序列 → 中文被立即删除 → "无法输入中文"
+//     v4: stopImmediatePropagation + 手动发送 → xterm 的 handler
+//         注册在先（同元素同目标按注册顺序执行），我们的 handler 在后
+//         → 无法阻止已经执行过的 xterm handler → 仍然双重输出
+//
+//   正确方案 (v5): 不清空 textarea，不在 compositionend 中手动发送。
+//         xterm 的 CompositionHandler 通过 onData 正常发送组合结果。
+//         我们在 compositionend 中只记录 _lastCompositionText。
+//         Fix 3 在 compositionend 后的 input 事件中，检查 textarea
+//         是否以 _lastCompositionText 开头，若是则只发送新增部分
+//         （剥离已发送的组合文本前缀），避免重复。
+//         若 textarea 内容与 _lastCompositionText 完全相同 → 跳过
+//         （IME 回写，无新输入）。
+//
+//   Caps Lock 场景：IME 将拼音 "wo men" 提交到 textarea → xterm 通过
+//   onData 发送 → tab-manager.js onData 路径的拼音过滤器去空格 → "women"。
+//   _lastCompositionText 记录为 "wo men"，Fix 3 剥离前缀正常工作。
 //
 // 补充：_compositionJustEnded 安全重置
-//   根因：_compositionJustEnded 标志设计为「composition 结束后拦截下一个非 229
-//         keydown」，但 macOS 上 Caps Lock 可能不触发 keydown → 标志永不重置
-//         → 下一个正常按键被误拦截。
 //   修复：compositionend 后 200ms setTimeout 自动重置标志。
 
 export function initImeFix(term, termEl) {
@@ -85,7 +91,6 @@ export function initImeFix(term, termEl) {
   if (!ta) return;
 
   // ── 修复 4 基础设施：跟踪 xterm onData 最近发送 ──
-  // tab-manager.js 的 onData 回调写入这两个字段，Fix 3 读取以避免双发
   term._xtermSentData = '';
   term._xtermSentTime = 0;
 
@@ -94,7 +99,6 @@ export function initImeFix(term, termEl) {
 
   // ── 修复 1: 粘贴后清空 textarea + 通知 mention 禁止触发 ──
   ta.addEventListener('paste', () => {
-    // 通知 mention controller 粘贴中（防止含 @ 文本触发弹窗闪烁）
     if (term._mentionController) term._mentionController.setPasting(true);
     requestAnimationFrame(() => {
       ta.value = '';
@@ -104,78 +108,106 @@ export function initImeFix(term, termEl) {
 
   // ── 修复 2: composition 期间拦截非 229 keydown ──
   let isComposing = false;
-  let _compositionEndedAt = 0; // 追踪最近一次 composition 结束时间
+  let _compositionEndedAt = 0;
 
-  // ★ Caps Lock 补充修复：composition 刚结束后的第一个非 229 keydown 也要拦截
-  // macOS 上 Caps Lock 切换输入法时，compositionend 先于 Caps Lock keydown 到达，
-  // 此时 isComposing 已经 false，Fix 2 不拦截 → xterm _finalizeComposition(false) 触发
-  // → 发送陈旧拼音。此标志兜住这个间隙。
   let _compositionJustEnded = false;
+
+  // ★ 修复 5: 记录 compositionend 时的组合文本，供 Fix 3 剥离前缀
+  let _lastCompositionText = '';
+  let _lastCompositionTextTime = 0;
 
   ta.addEventListener('compositionstart', () => {
     isComposing = true;
-    _compositionJustEnded = false; // 新 composition 开始，清除标志
+    _compositionJustEnded = false;
   }, true);
 
   ta.addEventListener('compositionend', () => {
     isComposing = false;
     _compositionEndedAt = Date.now();
-    term._compositionEndedAt = _compositionEndedAt; // 同步到 term 对象
-    // ★ 置标志：下一个非 229 keydown 仍然拦截
+    term._compositionEndedAt = _compositionEndedAt;
     _compositionJustEnded = true;
 
-    // ★ 安全重置
     setTimeout(() => { _compositionJustEnded = false; }, 200);
 
-    // ★ 修复 5: Caps Lock 中断时尽力清空 textarea
-    // xterm 的 _handleAnyTextareaChanges() 在 keyCode=229 keydown 时用
-    // setTimeout(0) 队列回调，这些 setTimeout 可能比 compositionend 事件先执行，
-    // 导致 onData 先收到 "wo men"（此时 recentlyComposed 还是 false）。
-    // 所以拼音过滤不能依赖 recentlyComposed，且不能在 compositionend 中
-    // 用 _imeSendFn 发送（会与 onData 过滤后的 "women" 双发）。
-    // 策略：仅在 compositionend 中清空 textarea（尽力阻止 xterm 读脏数据），
-    // 拼音空格过滤完全由 tab-manager.js onData 路径处理（不限 recentlyComposed）。
+    // ★ 修复 5 v5: 只记录组合文本，不清空 textarea，不手动发送
+    //
+    // 不清空 textarea：xterm 的 _handleAnyTextareaChanges() 会检测
+    // textarea 内容变化，如果从有内容变空，xterm 认为用户删除了文字，
+    // 发送退格序列 → 中文被删掉。
+    //
+    // 不手动发送：xterm 的 CompositionHandler 在 compositionend handler
+    // 中通过 onData 发送组合结果（它注册在先，先于我们执行），
+    // 手动发送会导致双重输出。
+    //
+    // 只记录 _lastCompositionText：Fix 3 在后续 input 事件中检查
+    // textarea 是否以组合文本开头，剥离前缀只发新增部分。
     const value = ta.value;
-    if (value && /^[a-zA-Z0-9]+( +[a-zA-Z0-9]+)+$/.test(value)) {
-      ta.value = ''; // 尽力清空（IME 可能写回，但 onData 兜底过滤）
+    if (value) {
+      _lastCompositionText = value;
+      _lastCompositionTextTime = Date.now();
     }
   }, true);
 
-  // 安全：失焦时重置 IME 状态，防止 isComposing 卡在 true
+  // 安全：失焦时重置 IME 状态
   ta.addEventListener('blur', () => {
     isComposing = false;
     _compositionJustEnded = false;
   }, true);
 
   ta.addEventListener('keydown', (e) => {
-    // composition 期间 OR composition 刚结束后的第一个非 229 keydown：
-    // 拦截以阻止 xterm 的 _finalizeComposition(false) 发送陈旧预编辑文本
     const shouldBlock = (isComposing || e.isComposing || _compositionJustEnded) &&
         e.keyCode !== 229 && e.keyCode !== 16 && e.keyCode !== 17 && e.keyCode !== 18;
     if (shouldBlock) {
       e.stopImmediatePropagation();
-      // ★ 如果 composition 已结束但标志仍为 true，说明这是导致结束的按键
-      // （如 Caps Lock），拦截这一次就够了，重置标志
       if (_compositionJustEnded && !isComposing && !e.isComposing) {
         _compositionJustEnded = false;
       }
-      // 安全网：Ctrl+C 取消 composition 时重置 isComposing
       if (e.ctrlKey && e.keyCode === 67) {
         isComposing = false;
       }
     }
-  }, true); // capture 阶段 — 在 xterm keydown handler 之前触发
+  }, true);
 
-  // ── 修复 3 + 修复 4: IME 直接字符插入捕获 + 去重 ──
+  // ── 修复 3 + 修复 4 + 修复 5: IME 直接字符插入捕获 + 去重 + 剥离前缀 ──
   if (termEl) {
     termEl.addEventListener('input', (e) => {
-      // composition 输入 — xterm 的 compositionend 处理器会处理
       if (e.isComposing || e.inputType === 'insertCompositionText') return;
-      // 粘贴/拖放 — xterm 通过 clipboardData 处理
       if (e.inputType === 'insertFromPaste' || e.inputType === 'insertFromDrop') return;
 
       const value = ta.value;
       if (!value) return;
+
+      // ★ 修复 5: compositionend 后，textarea 可能仍包含组合文本 + 新字符
+      // 例：输入"我们"后按空格 → textarea 有"我们 " →
+      //     xterm 已通过 onData 发送"我们"，Fix 3 只应发送" "
+      //
+      // 策略：
+      // 1. textarea === _lastCompositionText → IME 回写，无新输入 → 跳过
+      // 2. textarea 以 _lastCompositionText 开头 → 剥离前缀，只发新增部分
+      // 3. 200ms 窗口外 → _lastCompositionText 过期，正常处理
+      if (_lastCompositionText && (Date.now() - _lastCompositionTextTime) < 200) {
+        if (value === _lastCompositionText) {
+          // IME 回写，与组合文本完全相同 → 跳过并清空
+          ta.value = '';
+          return;
+        }
+        if (value.startsWith(_lastCompositionText)) {
+          // 剥离组合文本前缀，只处理新增部分
+          const newData = value.slice(_lastCompositionText.length);
+          ta.value = '';
+          if (!newData) return;
+          // 新增部分通过 Fix 4 去重检查后发送
+          const now = Date.now();
+          if (newData === term._xtermSentData && (now - term._xtermSentTime) < 100) {
+            return; // xterm 已发送
+          }
+          if (typeof term._imeSendFn === 'function') {
+            const filtered = term.imeFilter ? term.imeFilter(newData) : newData;
+            if (filtered) term._imeSendFn(filtered);
+          }
+          return;
+        }
+      }
 
       // ★ 修复 4: 跳过 xterm onData 已发送的重复数据
       const now = Date.now();
@@ -184,30 +216,20 @@ export function initImeFix(term, termEl) {
         return;
       }
 
-      // ★ 修复 3 改进: 移除 insertText 条件守卫
-      // 旧逻辑用 recentlyComposed 300ms 窗口或 lastKeyDownCode 判断，
-      // 但两者都不可靠 — recentlyComposed 过期丢弃 IME 直接插入的字符，
-      // lastKeyDownCode 在 IME 直接插入时 keyCode 不一定是 229。
-      // 正确做法：完全依赖 Fix 4 的 _xtermSentData 去重。
-      // xterm keydown 已处理的按键 → onData 先更新 _xtermSentData → Fix 4 跳过。
-      // IME 直接插入（xterm 未处理）→ _xtermSentData 不匹配 → Fix 3 发送。
-
-      // IME 直接插入了字符（如 Shift+1 → ！），xterm 两条路径都跳过了
+      // ★ 修复 3: IME 直接插入字符
       if (typeof term._imeSendFn === 'function') {
         const filtered = term.imeFilter ? term.imeFilter(value) : value;
         if (filtered) term._imeSendFn(filtered);
       }
       ta.value = '';
-    }, true);  // capture 阶段 — 在 textarea 任何处理器之前触发
+    }, true);
   }
 
-  // ── imeFilter: 去重复（覆盖单字符 + 多字符） ──
-  // 仅用于 _imeSendFn 路径（Fix 3），不用于 onData 路径
+  // ── imeFilter: 去重复 ──
   let lastSentData = '';
   let lastSentTime = 0;
   term.imeFilter = (data) => {
     const now = Date.now();
-    // 去重复：100ms 内收到和上次完全相同的数据，丢弃
     if (data === lastSentData && (now - lastSentTime) < 100) {
       return '';
     }
