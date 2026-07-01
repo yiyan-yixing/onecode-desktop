@@ -256,6 +256,19 @@ export class TabManager {
     term._imeSendFn = (data) => ptyWriteDedup(data, 'ime');
 
     const dataDisposable = term.onData((data) => {
+      // ★ onData 内部去重：keydown 和 _inputEvent 双发
+      // 根因: WKWebView 中 preventDefault() 无法阻止字符插入 textarea，
+      // xterm 的 _inputEvent handler 在 keydown 之后再次 triggerDataEvent →
+      // 同一字符通过 onData 被调用两次。
+      // 判断依据: _inputEvent 的触发是同步紧随 keydown 的（0-5ms），
+      // 而 _xtermSentData 由 keydown 路径的 triggerDataEvent 同步设置。
+      // 如果当前 data 与 _xtermSentData 相同且间隔 <20ms，说明是
+      // _inputEvent 的重复发送，丢弃。合法快速连击间隔 >30ms。
+      const now = Date.now();
+      if (data === term._xtermSentData && (now - term._xtermSentTime) < 20) {
+        return; // _inputEvent 重复 → 丢弃
+      }
+
       // ★ 修复 5: onData 路径过滤 IME 拼音空格（不限 recentlyComposed）
       // xterm 的 _handleAnyTextareaChanges() setTimeout 可能比 compositionend
       // 事件先执行 → recentlyComposed 仍为 false → 必须无条件过滤。
@@ -470,6 +483,12 @@ export class TabManager {
           });
         };
         const dataDisposable = st.term.onData((data) => {
+          // ★ onData 内部去重：keydown 和 _inputEvent 双发
+          const now = Date.now();
+          if (data === st.term._xtermSentData && (now - st.term._xtermSentTime) < 20) {
+            return;
+          }
+
           // ★ 修复 5: onData 路径过滤 IME 拼音空格（不限 recentlyComposed）
           if (/^[a-zA-Z0-9]+( +[a-zA-Z0-9]+)+$/.test(data)) {
             data = data.replace(/ +/g, '');

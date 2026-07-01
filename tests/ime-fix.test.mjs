@@ -107,8 +107,11 @@ function createImeEnv() {
   }
 
   function simulateXtermOnData(data) {
+    // ★ 模拟 xterm keydown 路径: 同步设置 _xtermSentData + _xtermSentTime
+    // 然后触发 onData 回调（含去重逻辑，与 tab-manager.js 一致）
     term._xtermSentData = data;
     term._xtermSentTime = Date.now();
+
     if (/^[a-zA-Z0-9]+( +[a-zA-Z0-9]+)+$/.test(data)) {
       data = data.replace(/ +/g, '');
     }
