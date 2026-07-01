@@ -37,12 +37,27 @@ function createImeEnv() {
   const sentViaOnData = [];
   const _sendLog = [];
 
+  // ★ 统一 PTY 写入去重（与 tab-manager.js ptyWriteDedup 一致，区分来源）
+  let _lastPtyData = '';
+  let _lastPtyTime = 0;
+  let _lastPtySource = '';
+  const ptyWriteDedup = (data, source) => {
+    const now = Date.now();
+    if (data === _lastPtyData && (now - _lastPtyTime) < 30 && source !== _lastPtySource) {
+      return; // 不同来源 30ms 内重复 → 丢弃
+    }
+    _lastPtyData = data;
+    _lastPtyTime = now;
+    _lastPtySource = source;
+    _sendLog.push({ source: 'pty', data });
+  };
+
   const term = {
     textarea: ta,
     element: { querySelector: () => ta },
     _imeSendFn: (data) => {
       sentViaImeSendFn.push(data);
-      _sendLog.push({ source: 'imeSendFn', data });
+      ptyWriteDedup(data, 'ime');
     },
     _xtermSentData: '',
     _xtermSentTime: 0,
@@ -86,7 +101,7 @@ function createImeEnv() {
     const bubbleKey = `${type}:bubble`;
     const captureListeners = elListeners[captureKey] || [];
     const bubbleListeners = elListeners[bubbleKey] || [];
-    const e = { type, isComposing: false, inputType: '', ...eventObj };
+    const e = { type, isComposing: false, inputType: '', stopImmediatePropagation: () => {}, ...eventObj };
     for (const fn of captureListeners) fn(e);
     for (const fn of bubbleListeners) fn(e);
   }
@@ -94,18 +109,11 @@ function createImeEnv() {
   function simulateXtermOnData(data) {
     term._xtermSentData = data;
     term._xtermSentTime = Date.now();
-    const now = Date.now();
-    const recentlyComposed = term._compositionEndedAt && (now - term._compositionEndedAt) < 300;
-    if (recentlyComposed && data === term._lastOnDataData && (now - term._lastOnDataTime) < 100) {
-      return;
-    }
-    term._lastOnDataData = data;
-    term._lastOnDataTime = now;
     if (/^[a-zA-Z0-9]+( +[a-zA-Z0-9]+)+$/.test(data)) {
       data = data.replace(/ +/g, '');
     }
     sentViaOnData.push(data);
-    _sendLog.push({ source: 'onData', data });
+    ptyWriteDedup(data, 'onData');
   }
 
   function flushRaf() {

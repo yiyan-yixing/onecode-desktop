@@ -230,16 +230,32 @@ export class TabManager {
       this.updateStatus(id, 'running');
     });
 
-    const dataDisposable = term.onData((data) => {
-      // ★ Caps Lock 安全网：composition 双发去重
+    // ★ 统一 PTY 写入去重：onData 和 _imeSendFn 都经过此函数
+    // 根因: WKWebView 中 keydown 的 preventDefault() 无法阻止字符插入 textarea，
+    // xterm 的 _inputEvent handler 会再次 triggerDataEvent 发送相同字符 → 重复。
+    // _imeSendFn 路径 (IME Shift+符号等) 和 onData 路径 (xterm keydown/_inputEvent)
+    // 都汇合到此去重。只在不同来源(imeSendFn vs onData) 30ms 内发送相同数据时去重，
+    // 同一来源的连续相同输入（如按两次 l）不去重。
+    let _lastPtyData = '';
+    let _lastPtyTime = 0;
+    let _lastPtySource = '';
+    const ptyWriteDedup = (data, source) => {
       const now = Date.now();
-      const recentlyComposed = term._compositionEndedAt && (now - term._compositionEndedAt) < 300;
-      if (recentlyComposed && data === term._lastOnDataData && (now - term._lastOnDataTime) < 100) {
-        return; // 丢弃重复
+      if (data === _lastPtyData && (now - _lastPtyTime) < 30 && source !== _lastPtySource) {
+        return; // 不同来源 30ms 内重复 → 丢弃
       }
-      term._lastOnDataData = data;
-      term._lastOnDataTime = now;
+      _lastPtyData = data;
+      _lastPtyTime = now;
+      _lastPtySource = source;
+      ipc.ptyWrite(id, data).catch((e) => {
+        console.warn(`[ptyWrite] failed for ${id}:`, e);
+      });
+    };
 
+    // IME 直接字符插入的发送回调（ime-fix.js Fix 3 需要）→ 走统一去重
+    term._imeSendFn = (data) => ptyWriteDedup(data, 'ime');
+
+    const dataDisposable = term.onData((data) => {
       // ★ 修复 5: onData 路径过滤 IME 拼音空格（不限 recentlyComposed）
       // xterm 的 _handleAnyTextareaChanges() setTimeout 可能比 compositionend
       // 事件先执行 → recentlyComposed 仍为 false → 必须无条件过滤。
@@ -250,11 +266,10 @@ export class TabManager {
 
       // ★ 修复 4: 记录过滤后的数据，供 ime-fix.js Fix 3 去重
       term._xtermSentData = data;
-      term._xtermSentTime = now;
+      term._xtermSentTime = Date.now();
 
-      ipc.ptyWrite(id, data).catch((e) => {
-        console.warn(`[ptyWrite] failed for ${id}:`, e);
-      });
+      // ★ 统一去重写入 PTY
+      ptyWriteDedup(data, 'onData');
     });
     const resizeDisposable = term.onResize(({ cols, rows }) => ipc.ptyResize(id, cols, rows));
 
@@ -438,16 +453,23 @@ export class TabManager {
         const unlistenExit = ipc.onPtyExit(realId, (code) => {
           this.updateStatus(realId, 'exited', code);
         });
-        const dataDisposable = st.term.onData((data) => {
-          // ★ Caps Lock 安全网：composition 双发去重
+        // ★ 统一 PTY 写入去重（与 createTab 相同逻辑，区分来源）
+        let _lastPtyDataReal = '';
+        let _lastPtyTimeReal = 0;
+        let _lastPtySourceReal = '';
+        const ptyWriteDedupReal = (data, source) => {
           const now = Date.now();
-          const recentlyComposed = st.term._compositionEndedAt && (now - st.term._compositionEndedAt) < 300;
-          if (recentlyComposed && data === st.term._lastOnDataData && (now - st.term._lastOnDataTime) < 100) {
+          if (data === _lastPtyDataReal && (now - _lastPtyTimeReal) < 30 && source !== _lastPtySourceReal) {
             return;
           }
-          st.term._lastOnDataData = data;
-          st.term._lastOnDataTime = now;
-
+          _lastPtyDataReal = data;
+          _lastPtyTimeReal = now;
+          _lastPtySourceReal = source;
+          ipc.ptyWrite(realId, data).catch((e) => {
+            console.warn(`[ptyWrite] failed for ${realId}:`, e);
+          });
+        };
+        const dataDisposable = st.term.onData((data) => {
           // ★ 修复 5: onData 路径过滤 IME 拼音空格（不限 recentlyComposed）
           if (/^[a-zA-Z0-9]+( +[a-zA-Z0-9]+)+$/.test(data)) {
             data = data.replace(/ +/g, '');
@@ -455,11 +477,10 @@ export class TabManager {
 
           // ★ 修复 4: 记录过滤后的数据，供 ime-fix.js Fix 3 去重
           st.term._xtermSentData = data;
-          st.term._xtermSentTime = now;
+          st.term._xtermSentTime = Date.now();
 
-          ipc.ptyWrite(realId, data).catch((e) => {
-            console.warn(`[ptyWrite] failed for ${realId}:`, e);
-          });
+          // ★ 统一去重写入 PTY
+          ptyWriteDedupReal(data, 'onData');
         });
         const resizeDisposable = st.term.onResize(({ cols, rows }) => ipc.ptyResize(realId, cols, rows));
         const mention = new MentionController({
@@ -467,8 +488,8 @@ export class TabManager {
           sendInput: (s) => ipc.ptyWrite(realId, s).catch(() => {}),
           getAgents: () => (this.agentProvider ? this.agentProvider() : []),
         });
-        // ★ 修复: 设置 _imeSendFn，error tab 重启后 IME Shift+符号不再丢失
-        st.term._imeSendFn = (data) => ipc.ptyWrite(realId, data);
+        // ★ 修复: 设置 _imeSendFn，error tab 重启后走统一去重
+        st.term._imeSendFn = (data) => ptyWriteDedupReal(data, 'ime');
         // 让 ime-fix.js paste handler 能通知 mention 禁止触发
         st.term._mentionController = mention;
 

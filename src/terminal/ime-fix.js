@@ -173,6 +173,13 @@ export function initImeFix(term, termEl) {
   }, true);
 
   // ── 修复 3 + 修复 4 + 修复 5: IME 直接字符插入捕获 + 去重 + 剥离前缀 ──
+  //
+  // ★ 核心问题: WKWebView 中 keydown 的 preventDefault() 无法阻止字符插入 textarea，
+  // xterm 的 _inputEvent handler (textarea capture) 会再次 triggerDataEvent → 重复输出。
+  // 解决方案: 不依赖在 termEl 上 stopImmediatePropagation 阻止 xterm（因为 textarea
+  // 和 termEl 是不同元素，stop 在 termEl 上无法阻止 textarea 上的 handler），
+  // 而是在 tab-manager.js 的 ptyWriteDedup 中统一去重——onData 和 _imeSendFn
+  // 两条路径汇合到同一个去重函数，30ms 窗口内相同数据只写一次 PTY。
   if (termEl) {
     termEl.addEventListener('input', (e) => {
       if (e.isComposing || e.inputType === 'insertCompositionText') return;
