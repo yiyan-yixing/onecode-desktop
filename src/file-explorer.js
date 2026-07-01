@@ -484,11 +484,11 @@ export class FileExplorerController {
         if (cwd) this.navigate(cwd);
       }
       // 启动自动刷新（每 15 秒）
-      // P1-20: Skip IPC refresh when sidebar is collapsed
+      // P1-20: Skip IPC refresh when file panel is collapsed
       this._stopRefresh();
       this._refreshTimer = setInterval(() => {
-        const sidebar = document.getElementById('orbital');
-        if (sidebar && sidebar.classList.contains('collapsed')) return;
+        const panel = document.getElementById('filePanel');
+        if (panel && panel.classList.contains('collapsed')) return;
         if (this._currentPath) this.refresh();
       }, 15000);
     } else {

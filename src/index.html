@@ -20,6 +20,13 @@
           <line x1="6" y1="2" x2="6" y2="14"/>
         </svg>
       </button>
+      <span class="titlebar-spacer"></span>
+      <button class="titlebar-btn" id="filePanelToggle" title="文件面板">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="2" y="2" width="12" height="12" rx="2"/>
+          <path d="M5 6h6M5 8h6M5 10h4"/>
+        </svg>
+      </button>
     </div>
 
     <!-- Main Content: Sidebar + Terminal -->
@@ -42,6 +49,9 @@
           </div>
         </div>
       </div>
+
+      <!-- File Panel (warm, right) -->
+      <aside class="sidebar sidebar-right collapsed" id="filePanel"></aside>
     </div>
 
     <!-- Status Bar -->

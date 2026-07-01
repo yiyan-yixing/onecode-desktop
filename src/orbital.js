@@ -1,7 +1,6 @@
-// 光球轨道 — 左侧面板，含「项目」/「文件」两个 Tab。
+// 光球轨道 — 左侧面板，含项目卡片列表 + 终端 orb。
 //
-// 「项目」Tab 显示已保存的项目卡片列表 + 终端 orb。
-// 「文件」Tab 显示文件浏览器（FileExplorerController）。
+// 「文件」Tab 已移至右侧面板（#filePanel），由 FileExplorerController 独立管理。
 
 import * as ipc from './ipc-bridge.js';
 
@@ -32,11 +31,8 @@ export class OrbitalController {
     this.el = null;
     this.agentProvider = null;
     this._ctxMenu = null;
-    this._activeTab = 'projects';
     this._projects = [];
     this._projectListView = null;
-    this._filesView = null;
-    this._fileExplorer = null;
     this._projectsLoaded = false;
     this._backends = []; // cached list from list_backends
   }
@@ -45,7 +41,6 @@ export class OrbitalController {
     this.tm = tm;
     this.el = document.getElementById('orbital');
 
-    this._renderTabBar();
     this._renderTabContent();
 
     // Context menu
@@ -80,77 +75,11 @@ export class OrbitalController {
     }
   }
 
-  // ── Tab Bar ──
-
-  _renderTabBar() {
-    const bar = document.createElement('div');
-    bar.className = 'orbital-tab-bar';
-
-    const tabProject = document.createElement('button');
-    tabProject.className = 'orbital-tab active';
-    tabProject.dataset.tab = 'projects';
-    tabProject.textContent = '项目';
-
-    const tabFiles = document.createElement('button');
-    tabFiles.className = 'orbital-tab';
-    tabFiles.dataset.tab = 'files';
-    tabFiles.textContent = '文件';
-
-    bar.appendChild(tabProject);
-    bar.appendChild(tabFiles);
-    this.el.appendChild(bar);
-
-    bar.addEventListener('click', (e) => {
-      const btn = e.target.closest('.orbital-tab');
-      if (!btn) return;
-      this._switchTab(btn.dataset.tab);
-    });
-  }
-
-  _switchTab(name) {
-    if (this._activeTab === name) return;
-    this._activeTab = name;
-
-    this.el.querySelectorAll('.orbital-tab').forEach((btn) => {
-      btn.classList.toggle('active', btn.dataset.tab === name);
-    });
-
-    this.el.querySelectorAll('.orbital-tab-content').forEach((panel) => {
-      panel.classList.toggle('hidden', panel.dataset.tab !== name);
-    });
-
-    if (name === 'files') {
-      if (this._fileExplorer) {
-        this._fileExplorer.setVisible(true);
-        this._fileExplorer.syncCwd(this.tm?.getActiveCwd());
-      }
-    } else {
-      if (this._fileExplorer) this._fileExplorer.setVisible(false);
-    }
-  }
-
-  /** Switch to Files tab (called by Cmd+Shift+F shortcut). */
-  switchToFiles() {
-    const sidebar = this.el;
-    if (sidebar.classList.contains('collapsed')) {
-      sidebar.classList.remove('collapsed');
-    }
-    this._switchTab('files');
-  }
-
-  /** Set the FileExplorerController instance. */
-  setFileExplorer(fe) {
-    this._fileExplorer = fe;
-    if (this._filesView) fe.init(this._filesView, this.tm);
-  }
-
   // ── Tab Content ──
 
   _renderTabContent() {
-    // ── Projects Tab ──
     const projectPanel = document.createElement('div');
     projectPanel.className = 'orbital-tab-content';
-    projectPanel.dataset.tab = 'projects';
 
     const projectBtn = document.createElement('button');
     projectBtn.className = 'orbital-action-btn';
@@ -167,19 +96,6 @@ export class OrbitalController {
     this.el.appendChild(projectPanel);
     this._projectListView = projectPanel;
 
-    // ── Files Tab ──
-    const filesPanel = document.createElement('div');
-    filesPanel.className = 'orbital-tab-content hidden';
-    filesPanel.dataset.tab = 'files';
-    this.el.appendChild(filesPanel);
-    this._filesView = filesPanel;
-
-    // Initialize file explorer if already set
-    if (this._fileExplorer) {
-      this._fileExplorer.init(filesPanel, this.tm);
-    }
-
-    // Load projects on init
     this._loadProjects();
   }
 

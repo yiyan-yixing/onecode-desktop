@@ -324,7 +324,7 @@ body::before {
 /* ══════════ Sidebar — Cowork Warm ══════════ */
 
 .sidebar {
-  width: 260px;
+  width: 220px;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
@@ -339,21 +339,19 @@ body::before {
   border-right: none;
 }
 
-/* (orbital-content replaced by orbital-tab-content — see Tab Bar section) */
-
-/* ── Sidebar Action Button ── */
+/* ── Sidebar Action Button (New Project) ── */
 
 .orbital-action-btn {
   display: flex;
   align-items: center;
-  gap: 6px;
-  margin: 10px 14px 4px;
-  padding: 7px 14px;
+  gap: 5px;
+  margin: 6px 8px 2px;
+  padding: 5px 10px;
   border: 1px dashed var(--clay);
-  border-radius: var(--r-sm);
+  border-radius: 6px;
   background: transparent;
-  color: var(--tx-warm3);
-  font: 12px/1 var(--font-ui);
+  color: var(--tx-warm4);
+  font: 11px/1 var(--font-ui);
   font-weight: 500;
   cursor: pointer;
   transition: all var(--dur-fast) var(--ease-out);
@@ -375,10 +373,10 @@ body::before {
 .project-card {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 10px;
-  margin: 1px 6px;
-  border-radius: var(--r-sm);
+  gap: 6px;
+  padding: 5px 8px;
+  margin: 0 4px;
+  border-radius: 6px;
   cursor: pointer;
   transition: background var(--dur-fast) var(--ease-out);
 }
@@ -393,13 +391,13 @@ body::before {
 }
 
 .project-icon {
-  width: 26px;
-  height: 26px;
-  border-radius: 8px;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
   flex-shrink: 0;
   transition: transform .12s;
@@ -415,7 +413,7 @@ body::before {
 }
 
 .project-name {
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
   color: var(--tx-warm2);
   white-space: nowrap;
@@ -432,11 +430,11 @@ body::before {
   color: var(--lavender);
   background: rgba(167,139,250,.10);
   border: 1px solid rgba(167,139,250,.18);
-  border-radius: 4px;
-  padding: 0 4px;
-  margin-left: 4px;
+  border-radius: 3px;
+  padding: 0 3px;
+  margin-left: 3px;
   vertical-align: middle;
-  line-height: 14px;
+  line-height: 13px;
   letter-spacing: 0.3px;
 }
 
@@ -462,8 +460,8 @@ body::before {
   font-size: 8px;
   font-weight: 700;
   color: var(--tx-warm4);
-  padding: 2px 5px;
-  border-radius: 6px;
+  padding: 1px 4px;
+  border-radius: 4px;
   background: var(--cream);
   border: 1px solid var(--sand);
   flex-shrink: 0;
@@ -481,10 +479,10 @@ body::before {
   background: none;
   border: none;
   color: var(--tx-warm4);
-  font-size: 14px;
-  padding: 2px 4px;
+  font-size: 13px;
+  padding: 2px 3px;
   cursor: pointer;
-  border-radius: var(--r-sm);
+  border-radius: var(--r-xs);
   line-height: 1;
   flex-shrink: 0;
   transition: opacity var(--dur-fast) var(--ease-out);
@@ -500,20 +498,20 @@ body::before {
 }
 
 .project-empty {
-  padding: 24px 14px;
+  padding: 16px 10px;
   text-align: center;
   color: var(--tx-warm4);
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .project-terminals {
-  margin-left: 8px;
+  margin-left: 6px;
   border-left: 1px solid var(--sand);
-  padding-left: 4px;
+  padding-left: 3px;
 }
 
 .project-terminals .orb {
-  padding: 4px 8px;
+  padding: 3px 6px;
   margin: 0;
 }
 
@@ -526,9 +524,9 @@ body::before {
 .orbital-section {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 10px 14px;
-  font-size: 10px;
+  gap: 5px;
+  padding: 7px 10px;
+  font-size: 9px;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 1px;
@@ -547,10 +545,10 @@ body::before {
   position: relative;
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 10px;
-  margin: 1px 6px;
-  border-radius: var(--r-sm);
+  gap: 6px;
+  padding: 4px 8px;
+  margin: 0 4px;
+  border-radius: 6px;
   cursor: pointer;
   transition: background var(--dur-fast) var(--ease-out);
 }
@@ -565,8 +563,8 @@ body::before {
 }
 
 .orb-dot {
-  width: 7px;
-  height: 7px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
   flex-shrink: 0;
   transition: all var(--dur-base) var(--ease-out);
@@ -609,7 +607,7 @@ body::before {
 }
 
 .orb-label {
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
   color: var(--tx-warm2);
   white-space: nowrap;
@@ -1286,46 +1284,7 @@ body::before {
   white-space: nowrap;
 }
 
-/* ══════════ Sidebar Tab Bar (项目 / 文件) ══════════ */
-
-.orbital-tab-bar {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  padding: 8px 10px 0;
-  flex-shrink: 0;
-  user-select: none;
-  -webkit-app-region: no-drag;
-}
-
-.orbital-tab {
-  flex: 1;
-  height: 28px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--tx-warm3);
-  font: 500 11px/1 var(--font-ui);
-  cursor: pointer;
-  transition: all var(--dur-fast) var(--ease-out);
-  position: relative;
-}
-
-.orbital-tab:hover {
-  background: var(--sand);
-  color: var(--tx-warm2);
-}
-
-.orbital-tab.active {
-  background: var(--sand);
-  color: var(--tx-warm);
-  font-weight: 600;
-}
-
-/* Tab content panels */
+/* ══════════ Sidebar Content Panel ══════════ */
 
 .orbital-tab-content {
   flex: 1;

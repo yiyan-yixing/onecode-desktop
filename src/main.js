@@ -83,14 +83,14 @@ async function init() {
   tabManager.orbital = orbital;
   tabManager.ripple = ripple;
   orbital.init(tabManager);
-  orbital.setFileExplorer(fileExplorer);
   palette.init(tabManager);
   ripple.init();
   tabManager.onChange = (tm) => {
     updateStatusbar(tm);
     orbital._loadProjects(); // refresh project list (hides cards with no terminals)
-    // 同步文件浏览器 cwd
-    if (orbital._activeTab === 'files' && fileExplorer) {
+    // 同步文件浏览器 cwd（右侧面板展开时）
+    const filePanel = document.getElementById('filePanel');
+    if (filePanel && !filePanel.classList.contains('collapsed') && fileExplorer) {
       fileExplorer.syncCwd(tm.getActiveCwd());
     }
     // 切换标签页/目录时刷新 CC Status 徽章
@@ -133,6 +133,20 @@ async function init() {
   document.getElementById('sidebarToggle')?.addEventListener('click', () => {
     const sidebar = document.getElementById('orbital');
     if (sidebar) sidebar.classList.toggle('collapsed');
+  });
+
+  // File panel toggle button in titlebar
+  const filePanel = document.getElementById('filePanel');
+  fileExplorer.init(filePanel, tabManager);
+  document.getElementById('filePanelToggle')?.addEventListener('click', () => {
+    const panel = document.getElementById('filePanel');
+    if (panel) {
+      panel.classList.toggle('collapsed');
+      fileExplorer.setVisible(!panel.classList.contains('collapsed'));
+      if (!panel.classList.contains('collapsed')) {
+        fileExplorer.syncCwd(tabManager.getActiveCwd());
+      }
+    }
   });
 
   // Session restore
@@ -225,10 +239,15 @@ function initKeybindings(tm) {
       if (sidebar) sidebar.classList.toggle('collapsed');
       return;
     }
-    // Cmd+Shift+F → switch to Files tab
+    // Cmd+Shift+F → open file panel
     if (e[mod] && e.shiftKey && e.key.toLowerCase() === 'f') {
       e.preventDefault();
-      orbital.switchToFiles();
+      const panel = document.getElementById('filePanel');
+      if (panel) {
+        panel.classList.remove('collapsed');
+        fileExplorer.setVisible(true);
+        fileExplorer.syncCwd(tm.getActiveCwd());
+      }
       return;
     }
     if (!e[mod]) return;
