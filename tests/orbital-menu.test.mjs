@@ -13,9 +13,6 @@ describe('innerHTML += 销毁监听器验证', () => {
 
     // 模拟"已渲染 + 监听器绑定"的菜单项
     const items = [
-      { label: '打开新终端', clickCount: 0 },
-      { label: '在 Finder 中显示', clickCount: 0 },
-      { sep: true },
       { label: '关闭', clickCount: 0 },
       { sep: true },
       { label: '删除项目', clickCount: 0 },
@@ -61,7 +58,7 @@ describe('innerHTML += 销毁监听器验证', () => {
     });
     // 所有菜单项的监听器完好
     newWayElements.filter(el => !el.isSep).forEach(el => el.click());
-    assert.deepEqual(newWayClicked, ['打开新终端', '在 Finder 中显示', '关闭', '删除项目'],
+    assert.deepEqual(newWayClicked, ['关闭', '删除项目'],
       'createElement 方式所有项都能响应点击');
   });
 });
@@ -75,29 +72,20 @@ describe('项目菜单无终端场景', () => {
     const proj = { id: 'test', name: '测试项目', dir: '/tmp/test', backend: null };
     const items = [];
 
-    // 打开新终端 — 始终可用
-    items.push({ label: '打开新终端', action: 'createTab' });
-
-    // 在 Finder 中显示 — 始终可用
-    if (proj.dir) {
-      items.push({ label: '在 Finder 中显示', action: 'openFinder' });
-    }
-
     // 关闭 — 仅在有终端时显示
     if (termIds.length > 0) {
-      items.push({ sep: true });
       items.push({ label: `关闭`, cls: 'danger', action: 'close' });
     }
 
     // 删除项目 — 始终可用
-    items.push({ sep: true });
+    if (items.length > 0) items.push({ sep: true });
     items.push({ label: '删除项目', cls: 'danger', action: 'delete' });
 
     const actionItems = items.filter(it => !it.sep);
     assert.ok(actionItems.length > 0, '无终端时菜单不应为空');
     assert.deepEqual(actionItems.map(it => it.label),
-      ['打开新终端', '在 Finder 中显示', '删除项目'],
-      '无终端时应显示三个操作');
+      ['删除项目'],
+      '无终端时应显示删除操作');
   });
 
   test('有终端时菜单包含关闭操作', () => {
@@ -105,18 +93,15 @@ describe('项目菜单无终端场景', () => {
     const proj = { id: 'test', name: '测试项目', dir: '/tmp/test', backend: null };
     const items = [];
 
-    items.push({ label: '打开新终端', action: 'createTab' });
-    if (proj.dir) items.push({ label: '在 Finder 中显示', action: 'openFinder' });
     if (termIds.length > 0) {
-      items.push({ sep: true });
       items.push({ label: `关闭（${termIds.length} 个终端）`, cls: 'danger', action: 'close' });
     }
-    items.push({ sep: true });
+    if (items.length > 0) items.push({ sep: true });
     items.push({ label: '删除项目', cls: 'danger', action: 'delete' });
 
     const actionItems = items.filter(it => !it.sep);
     assert.deepEqual(actionItems.map(it => it.label),
-      ['打开新终端', '在 Finder 中显示', '关闭（2 个终端）', '删除项目'],
-      '有终端时应包含关闭操作');
+      ['关闭（2 个终端）', '删除项目'],
+      '有终端时应包含关闭和删除操作');
   });
 });

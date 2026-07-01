@@ -726,32 +726,18 @@ export class OrbitalController {
     }
 
     const projId = proj.id || proj.name;
-    const projBackend = proj.backend || null;
     const items = [];
 
-    // 打开新终端 — 始终可用
-    items.push({ label: '打开新终端', action: () => {
-      this.tm.createTab({ label: proj.name, cwd: proj.dir, projectId: projId, backend: projBackend });
-    }});
-
-    // 在 Finder 中显示 — 始终可用
-    if (proj.dir) {
-      items.push({ label: '在 Finder 中显示', action: () => {
-        const { invoke } = window.__TAURI__.core;
-        invoke('plugin:shell|open', { path: proj.dir }).catch(() => {});
-      }});
-    }
 
     // 关闭 — 仅在有终端时显示
     if (termIds.length > 0) {
-      items.push({ sep: true });
       items.push({ label: `关闭（${termIds.length} 个终端）`, cls: 'danger', action: () => {
         [...termIds].forEach(tid => this.tm.closeTab(tid));
       }});
     }
 
     // 删除项目 — 始终可用
-    items.push({ sep: true });
+    if (items.length > 0) items.push({ sep: true });
     items.push({ label: '删除项目', cls: 'danger', action: async () => {
       let activeCount = 0;
       if (this.tm && this.tm.tabs) {
@@ -823,11 +809,7 @@ export class OrbitalController {
     menu.style.left = e.clientX + 'px';
     menu.style.top = e.clientY + 'px';
 
-    const projBackend = proj.backend || null;
     const items = [
-      { label: '打开新终端', action: () => this.tm.createTab({ label: proj.name, cwd: proj.dir, projectId: proj.id || proj.name, backend: projBackend }) },
-      { label: '在 Finder 中显示', action: () => { if (proj.dir) { const { invoke } = window.__TAURI__.core; invoke('plugin:shell|open', { path: proj.dir }).catch(() => {}); } } },
-      { sep: true },
       { label: '删除项目', cls: 'danger', action: async () => {
         // Count running terminals for this project
         let activeCount = 0;

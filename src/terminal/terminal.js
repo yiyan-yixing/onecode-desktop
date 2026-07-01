@@ -55,6 +55,18 @@ export function createTerminal(containerEl) {
 
   const fitAddon = new FitAddon.FitAddon();
   term.loadAddon(fitAddon);
+
+  // 覆写 fit()：fit 后自动减一行，防止最后一行被状态栏亚像素遮挡
+  // 所有 fitAddon.fit() 调用（含 tab-manager）都会走此路径，无需逐处修改
+  const _origFit = fitAddon.fit.bind(fitAddon);
+  fitAddon.fit = function () {
+    _origFit();
+    const p = fitAddon.proposeDimensions();
+    if (p && p.rows > 1 && (term.rows !== p.rows - 1 || term.cols !== p.cols)) {
+      term.resize(p.cols, p.rows - 1);
+    }
+  };
+
   if (WebLinksAddon) term.loadAddon(new WebLinksAddon.WebLinksAddon());
   term.open(containerEl);
 

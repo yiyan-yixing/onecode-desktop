@@ -261,25 +261,35 @@ export class FileExplorerController {
     const bcr = this._toolbarEl.querySelector('.fe-breadcrumb');
     if (!bcr || !this._currentPath) return;
 
-    // 将 home 目录替换为 ~
-    const displayPath = this._home && this._currentPath.startsWith(this._home)
-      ? '~' + this._currentPath.slice(this._home.length)
-      : this._currentPath;
+    const homePath = this._home || '/';
+    // 判断当前路径是否在 home 下
+    const underHome = this._home && this._currentPath.startsWith(this._home);
 
-    const segments = displayPath.split('/').filter(Boolean);
-    let html = '<span class="fe-bcr-seg fe-bcr-home" data-path="/">~</span>';
-    let accPath = '';
+    // ~ home 按钮
+    let html = `<span class="fe-bcr-seg fe-bcr-home" data-path="${esc(homePath)}">~</span>`;
 
-    // 计算实际路径的累积（使用 _home 替换 ~）
-    segments.forEach((seg, i) => {
-      accPath += '/' + (seg === '~' ? '' : seg);
-      const actualPath = this._home && accPath.startsWith('/~')
-        ? this._home + accPath.slice(2)
-        : accPath || '/';
-      const isLast = i === segments.length - 1;
-      html += `<span class="fe-bcr-sep">/</span>`;
-      html += `<span class="fe-bcr-seg${isLast ? ' fe-bcr-cur' : ''}" data-path="${esc(actualPath)}">${esc(seg)}</span>`;
-    });
+    if (underHome) {
+      // 路径在 home 下：取 home 之后的路径段
+      const relPath = this._currentPath.slice(this._home.length); // 如 "/yiyan-yixing/onecode-desktop"
+      const segments = relPath.split('/').filter(Boolean); // ["yiyan-yixing", "onecode-desktop"]
+      let accPath = this._home; // 从 home 开始累积
+      segments.forEach((seg, i) => {
+        accPath += '/' + seg;
+        const isLast = i === segments.length - 1;
+        html += `<span class="fe-bcr-sep">/</span>`;
+        html += `<span class="fe-bcr-seg${isLast ? ' fe-bcr-cur' : ''}" data-path="${esc(accPath)}">${esc(seg)}</span>`;
+      });
+    } else {
+      // 路径不在 home 下（如 /tmp）：按原始路径段显示
+      const segments = this._currentPath.split('/').filter(Boolean);
+      let accPath = '';
+      segments.forEach((seg, i) => {
+        accPath += '/' + seg;
+        const isLast = i === segments.length - 1;
+        html += `<span class="fe-bcr-sep">/</span>`;
+        html += `<span class="fe-bcr-seg${isLast ? ' fe-bcr-cur' : ''}" data-path="${esc(accPath)}">${esc(seg)}</span>`;
+      });
+    }
 
     bcr.innerHTML = html;
 
@@ -298,13 +308,16 @@ export class FileExplorerController {
     tree.innerHTML = '';
 
     // 如果不在根目录，添加 ".." 返回上级
+    // 但不越过 home 目录（Rust validate_path 限制在 home 内）
     if (this._currentPath !== '/' && this._currentPath !== this._home) {
-      const parentPath = this._currentPath.replace(/\/[^/]+$/, '') || '/';
+      let parentPath = this._currentPath.replace(/\/[^/]+$/, '') || '/';
+      // 如果上级目录超出 home，则限制到 home
+      if (this._home && !parentPath.startsWith(this._home)) {
+        parentPath = this._home;
+      }
       const upItem = document.createElement('div');
       upItem.className = 'fe-item fe-item-up';
-      upItem.innerHTML =
-        '<span class="fe-icon"><svg viewBox="0 0 16 16" fill="none" stroke="var(--tx-warm4)" stroke-width="1" stroke-linecap="round" style="width:14px;height:14px"><path d="M8 11V5M8 5L5 8M8 5l3 3"/></svg></span>' +
-        '<span class="fe-name">..</span>';
+      upItem.innerHTML = '<span class="fe-icon"></span><span class="fe-name">..</span>';
       upItem.addEventListener('click', () => this.navigate(parentPath));
       tree.appendChild(upItem);
     }
