@@ -34,6 +34,12 @@
 //     下一个非 229 keydown 仍然拦截（这是导致 composition 结束的那个按键），
 //     拦截后重置标志。这覆盖了 Caps Lock、Enter、空格等所有中断键。
 //
+//   补充（keypress 拦截）：
+//     Fix 2 只拦截了 keydown，但 keypress 仍然触发。xterm 的 _keyPress
+//     检查 _keyDownHandled（由 _keyDown 设置），因 keydown 被阻止所以
+//     _keyDownHandled=false → _keyPress 继续发送字符 → 与 Fix 3 的
+//     _imeSendFn 路径产生双发。修复：与 keydown 同条件拦截 keypress。
+//
 // 修复 3: IME 直接字符插入捕获（Shift+符号键如 ！@#￥%）
 //   根因：IME 激活时按 Shift+1，xterm 的 keydown handler 看到
 //         isComposing=true → 跳过 + 不调 preventDefault → IME 产出
@@ -85,6 +91,14 @@
 //
 // 补充：_compositionJustEnded 安全重置
 //   修复：compositionend 后 200ms setTimeout 自动重置标志。
+//
+// 修复 6: NBSP → 标准空格统一
+//   根因：IME 激活时 WKWebView 的 textarea 将空格键映射为不间断空格
+//         U+00A0 (charCode 160) 而非标准空格 U+0020 (charCode 32)。
+//         xterm 的 onData 路径发送标准空格 (32)，Fix 3 从 ta.value 读到
+//         NBSP (160) → 字符串比较 === 不匹配 → 所有去重机制失效 → 空格双发。
+//   修复：在 Fix 3 input handler 入口，将 ta.value 中的 NBSP 替换为标准空格
+//         后再做比较和发送，使 Fix 4 去重和 ptyWriteDedup 跨源去重正确匹配。
 
 export function initImeFix(term, termEl) {
   const ta = term.textarea || (term.element && term.element.querySelector('textarea'));
@@ -172,7 +186,20 @@ export function initImeFix(term, termEl) {
     }
   }, true);
 
-  // ── 修复 3 + 修复 4 + 修复 5: IME 直接字符插入捕获 + 去重 + 剥离前缀 ──
+  // ★ 修复 2 补充: 拦截 keypress 防止双发
+  //   根因：Fix 2 用 stopImmediatePropagation 阻止了 keydown → xterm 的 _keyDown
+  //   不执行 → _keyDownHandled 保持 false。后续 keypress 触发时，xterm 的 _keyPress
+  //   检查 _keyDownHandled 发现为 false → 继续发送字符 → 双发。
+  //   修复：与 keydown 同条件拦截 keypress，阻止 xterm 的 _keyPress 发送。
+  ta.addEventListener('keypress', (e) => {
+    const shouldBlock = (isComposing || e.isComposing || _compositionJustEnded) &&
+        e.keyCode !== 229 && e.keyCode !== 16 && e.keyCode !== 17 && e.keyCode !== 18;
+    if (shouldBlock) {
+      e.stopImmediatePropagation();
+    }
+  }, true);
+
+  // ── 修复 3 + 修复 4 + 修复 5 + 修复 6: IME 直接字符插入捕获 + 去重 + 剥离前缀 + NBSP 统一 ──
   //
   // ★ 核心问题: WKWebView 中 keydown 的 preventDefault() 无法阻止字符插入 textarea，
   // xterm 的 _inputEvent handler (textarea capture) 会再次 triggerDataEvent → 重复输出。
@@ -185,8 +212,17 @@ export function initImeFix(term, termEl) {
       if (e.isComposing || e.inputType === 'insertCompositionText') return;
       if (e.inputType === 'insertFromPaste' || e.inputType === 'insertFromDrop') return;
 
-      const value = ta.value;
+      let value = ta.value;
       if (!value) return;
+
+      // ★ 修复 6: NBSP → 标准空格统一
+      // 根因：IME 激活时 WKWebView 的 textarea 将空格键映射为不间断空格
+      // U+00A0 (charCode 160) 而非标准空格 U+0020 (charCode 32)。
+      // xterm 的 onData 路径发送标准空格 (32)，Fix 3 从 ta.value 读到
+      // NBSP (160) → 字符串比较 `===` 不匹配 → 所有去重机制失效 → 空格双发。
+      // 修复：将 ta.value 中的 NBSP 替换为标准空格后再做比较和发送，
+      // 使 Fix 4 去重和 ptyWriteDedup 跨源去重都能正确匹配。
+      value = value.replace(/ /g, ' ');
 
       // ★ 修复 5: compositionend 后，textarea 可能仍包含组合文本 + 新字符
       // 例：输入"我们"后按空格 → textarea 有"我们 " →
@@ -218,6 +254,9 @@ export function initImeFix(term, termEl) {
           if (typeof term._imeSendFn === 'function') {
             const filtered = term.imeFilter ? term.imeFilter(newData) : newData;
             if (filtered) term._imeSendFn(filtered);
+            // ★ 同步更新 _xtermSentData，防止 xterm _inputEvent 双发
+            term._xtermSentData = filtered;
+            term._xtermSentTime = Date.now();
           }
           return;
         }
@@ -234,6 +273,9 @@ export function initImeFix(term, termEl) {
       if (typeof term._imeSendFn === 'function') {
         const filtered = term.imeFilter ? term.imeFilter(value) : value;
         if (filtered) term._imeSendFn(filtered);
+        // ★ 同步更新 _xtermSentData，防止 xterm _inputEvent 双发
+        term._xtermSentData = filtered;
+        term._xtermSentTime = Date.now();
       }
       ta.value = '';
     }, true);
