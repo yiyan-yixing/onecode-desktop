@@ -4,7 +4,7 @@
 //! - §2 IPC：PTY 输出走 `Channel<Vec<u8>>` 流式二进制，**无 base64**。
 //! - §4 并发：`RwLock<HashMap>`，write/resize/replay/rename/list 取读锁（可并发），
 //!   spawn/kill/restart 取写锁（低频）；每个 slot 的 PTY 句柄独立 Mutex。
-//! - §5 批量推送：reader 线程 → mpsc → 16ms / 32KB 批量合并 → Channel.send。
+//! - §5 批量推送：reader 线程 → mpsc → 50ms / 128KB 批量合并 + 交互式立即刷新 → Channel.send。
 //! - 自动重启：移植自 pty.js:135-164 的指数退避（500ms × 2^n，上限 30s，10 次封顶，
 //!   稳定运行 5s 重置）。
 
@@ -38,6 +38,10 @@ const DEFAULT_ROWS: u16 = 50;
 const FLUSH_INTERVAL_MS: u64 = 50;
 /// 超过此阈值立即推送（不等定时器，避免大块输出卡住）
 const FLUSH_IMMEDIATE_BYTES: usize = 128 * 1024;
+/// 用户输入后此窗口内的 PTY 输出立即推送（对齐 Web 网关 FLUSH_INTERACTIVE_MS）。
+/// 退格/方向键等交互响应通常只有几十字节，永远达不到 128KB 阈值，
+/// 不加此判断则每次都等 50ms 定时器 → 交互拖尾感。
+const FLUSH_INTERACTIVE_MS: u64 = 100;
 /// mpsc channel 容量
 const PTY_CHAN_CAPACITY: usize = 256;
 /// 自动重启次数上限（对齐 pty.js）
@@ -513,7 +517,7 @@ fn create_pty(
 }
 
 /// 启动 reader 线程 + batcher tokio 任务。
-/// reader 线程阻塞读 PTY → mpsc；batcher 16ms/32KB 合并 → Channel.send + ring_buffer.push。
+/// reader 线程阻塞读 PTY → mpsc；batcher 50ms/128KB 合并 + 交互式立即刷新 → Channel.send + ring_buffer.push。
 fn start_reader_batcher(
     slot: Arc<TerminalSlot>,
     channel: Channel<Vec<u8>>,
@@ -540,21 +544,68 @@ fn start_reader_batcher(
         }
     });
 
-    // batcher：批量合并 + 推送
+    // batcher：批量合并 + 推送（三重触发：大块立即 / 交互式微批 / 定时器兜底）
+    //
+    // 交互式微批设计：
+    //   PTY 对单次退格的响应经常拆成 2+ chunk（如 4B + 32B）在同毫秒内到达。
+    //   如果每个 chunk 单独 flush → 2 次 Channel.send → 2 次 term.write → 2 次 canvas 重绘。
+    //   微批合并：收到交互式数据后等 2ms，将可能紧随的后续 chunk 合并为单次 flush。
+    //   总延迟：2ms（微批等待）vs 0ms（立即），但渲染次数减半 → 体感更快。
     runtime.spawn(async move {
         let mut batch = Vec::with_capacity(8192);
         let mut interval = tokio::time::interval(Duration::from_millis(FLUSH_INTERVAL_MS));
         interval.tick().await; // 首次立即触发
+
+        // 交互式微批定时器：收到交互式数据后启动，2ms 后 flush
+        // 初始设为极大值（永不到期），进入微批模式时重设为 2ms
+        let mut interactive_delay = tokio::time::sleep(Duration::from_secs(86400));
+        let mut interactive_pending = false;
+        // pin 交互式延迟 future（tokio::select! 需要 pinned future）
+        tokio::pin!(interactive_delay);
+
         loop {
             tokio::select! {
                 Some(chunk) = rx.recv() => {
+                    let recv_ts = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64;
                     batch.extend_from_slice(&chunk);
                     if batch.len() >= FLUSH_IMMEDIATE_BYTES {
+                        // 大块输出 — 立即推送（避免积压），取消微批定时器
+                        interactive_pending = false;
+                        flush(&channel, &slot, &mut batch);
+                    } else if !interactive_pending {
+                        // 非交互式数据或首包 — 检查是否在交互式窗口内
+                        let last_input = slot.last_input_time.load(Ordering::Relaxed);
+                        if last_input > 0 && recv_ts.saturating_sub(last_input) < FLUSH_INTERACTIVE_MS {
+                            // 交互式数据 — 启动 2ms 微批定时器，等后续 chunk 合并
+                            interactive_pending = true;
+                            interactive_delay.set(tokio::time::sleep(Duration::from_millis(2)));
+                        }
+                        // 非交互式 → 不做任何操作，等 50ms 定时器
+                    }
+                    // interactive_pending = true → 正在微批等待中，新数据已 extend，等定时器到期
+                }
+                _ = &mut interactive_delay, if interactive_pending => {
+                    // 交互式微批到期 — flush 合并后的数据
+                    if !batch.is_empty() {
+                        let last_input = slot.last_input_time.load(Ordering::Relaxed);
+                        let now_ms = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_millis() as u64;
+                        let ago_ms = now_ms.saturating_sub(last_input);
+                        log::debug!("[pty] INTERACTIVE flush: {}B input_ago={}ms", batch.len(), ago_ms);
                         flush(&channel, &slot, &mut batch);
                     }
+                    interactive_pending = false;
                 }
                 _ = interval.tick() => {
+                    // 定时器兜底 — 非交互式或微批漏网的场景
+                    interactive_pending = false;
                     if !batch.is_empty() {
+                        log::debug!("[pty] TIMER flush: {}B", batch.len());
                         flush(&channel, &slot, &mut batch);
                     }
                 }

@@ -4,6 +4,9 @@
 const { invoke, Channel } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 
+// 缓存 TextEncoder 实例，避免每次 ptyWrite 调用都 new
+const _textEncoder = new TextEncoder();
+
 /** 规范化 Channel 收到的字节为 Uint8Array（兼容 number[] 与 Uint8Array 两种传输）。 */
 function toBytes(chunk) {
   return chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk);
@@ -56,14 +59,20 @@ async function safeInvoke(cmd, args) {
  */
 export async function ptySpawn({ cmd, args, cwd, env, label, projectId, backend, cols, rows, onData }) {
   const channel = new Channel();
-  channel.onmessage = (chunk) => onData(toBytes(chunk));
+  channel.onmessage = (chunk) => {
+    const bytes = toBytes(chunk);
+    onData(bytes);
+  };
   return safeInvoke('pty_spawn', { cmd, args, cwd, env, label, projectId, backend: backend || null, cols, rows, dataChannel: channel });
 }
 
 /** 手动重启：前端传入新的 onData 回调（旧 Channel 已失效）+ 终端当前尺寸。 */
 export async function ptyRestart(id, onData, cols, rows) {
   const channel = new Channel();
-  channel.onmessage = (chunk) => onData(toBytes(chunk));
+  channel.onmessage = (chunk) => {
+    const bytes = toBytes(chunk);
+    onData(bytes);
+  };
   return safeInvoke('pty_restart', { id, cols, rows, dataChannel: channel });
 }
 
@@ -73,7 +82,7 @@ export async function ptyKill(id) {
 
 /** data 为 term.onData 给的 string（UTF-8），转字节后传 Rust Vec<u8>。 */
 export async function ptyWrite(id, data) {
-  const bytes = Array.from(new TextEncoder().encode(data));
+  const bytes = Array.from(_textEncoder.encode(data));
   return safeInvoke('pty_write', { id, data: bytes });
 }
 

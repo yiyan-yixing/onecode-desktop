@@ -47,10 +47,11 @@ export function createTerminal(containerEl) {
     convertEol: false,
     // 新输出时滚动到底部（claude TUI 全屏重绘时跟随）
     scrollOnUserInput: true,
-    // xterm 内置滚动调参（双重保障，但 WKWebView 下可能不生效）
-    scrollSensitivity: 10,
-    fastScrollModifier: 'alt',
-    fastScrollSensitivity: 20,
+    // ⚠️ 滚动灵敏度由自定义加速器（attachCustomWheelEventHandler）接管，
+    //    此处禁用 xterm 内置灵敏度，避免双重系统冲突。
+    scrollSensitivity: 1,
+    fastScrollModifier: undefined,
+    fastScrollSensitivity: 1,
   });
 
   const fitAddon = new FitAddon.FitAddon();
@@ -70,35 +71,40 @@ export function createTerminal(containerEl) {
   if (WebLinksAddon) term.loadAddon(new WebLinksAddon.WebLinksAddon());
   term.open(containerEl);
 
-  // ── 自定义滚轮加速器（必须在 term.open 之后，DOM 才存在）──
+  // ── 自定义滚轮加速器（xterm 5.5 官方 API）──
   //
-  // xterm DOM 结构：.xterm > [.xterm-viewport, .xterm-screen]
-  // 用户鼠标在 .xterm-screen（canvas），wheel 事件从 .xterm-screen 冒泡到 .xterm。
-  // .xterm-viewport 是 .xterm-screen 的兄弟节点，不是父节点，
-  // 所以监听 .xterm-viewport 永远收不到事件！
-  //
-  // 正确做法：在 containerEl（.xterm 的父元素）上用 capture:true 拦截，
-  // 取消 xterm 的默认处理，直接操作 viewport.scrollTop 实现加速。
+  // 使用 attachCustomWheelEventHandler 在 xterm 内部处理 wheel 之前拦截。
+  // 返回 false → xterm 不处理此事件；返回 true → xterm 正常处理。
+  // 通过 term.scrollLines() 行级 API 驱动滚动，而非直接操作 viewport.scrollTop（像素级），
+  // 消除像素/行级粒度冲突导致的抖动、边界速度跳变、_ignoreNextScrollEvent 竞态等问题。
   const SCROLL_BOOST = 5;   // 基础倍速
   const FAST_BOOST = 15;    // Alt 加速倍速
-  const xtermEl = containerEl.querySelector('.xterm');
-  const viewportEl = containerEl.querySelector('.xterm-viewport');
-  if (xtermEl && viewportEl) {
-    xtermEl.addEventListener('wheel', function (e) {
-      // vim/tmux 鼠标追踪模式：滚轮应发给 PTY，不要拦截
-      if (term.coreMouseService && term.coreMouseService.areMouseEventsActive) return;
-      // 水平滚动或 Shift 滚动不处理
-      if (e.deltaY === 0 || e.shiftKey) return;
-      const boost = e.altKey ? FAST_BOOST : SCROLL_BOOST;
-      const boosted = e.deltaY * boost;
-      const newTop = Math.max(0, Math.min(viewportEl.scrollTop + boosted, viewportEl.scrollHeight - viewportEl.clientHeight));
-      if (newTop !== viewportEl.scrollTop) {
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        viewportEl.scrollTop = newTop;
-      }
-    }, { capture: true, passive: false });
-  }
+
+  // 获取行高（resize 时更新）
+  let _rowHeight = 0;
+  const updateRowHeight = () => {
+    try {
+      _rowHeight = term._core._renderService.dimensions.css.cell.height;
+    } catch (_) {}
+  };
+  term.onResize(() => updateRowHeight());
+  updateRowHeight();
+
+  term.attachCustomWheelEventHandler((e) => {
+    // vim/tmux 鼠标追踪模式：滚轮应发给 PTY，交给 xterm 处理
+    if (term.coreMouseService && term.coreMouseService.areMouseEventsActive) return true;
+    // 水平滚动或 Shift 滚动：交给 xterm 处理
+    if (e.deltaY === 0 || e.shiftKey) return true;
+    // 无 scrollback 内容：交给 xterm 处理
+    if (term.buffer.active.length <= term.rows) return true;
+
+    const boost = e.altKey ? FAST_BOOST : SCROLL_BOOST;
+    const linesToScroll = Math.round((e.deltaY * boost) / Math.max(1, _rowHeight));
+    if (linesToScroll !== 0) {
+      term.scrollLines(linesToScroll, true); // suppressScrollEvent: 避免 onScroll 二次触发
+    }
+    return false; // 始终阻止 xterm 默认处理
+  });
 
   // Canvas 渲染器（WKWebView 下 WebGL 闪烁，统一用 canvas）
   fitAddon.fit();

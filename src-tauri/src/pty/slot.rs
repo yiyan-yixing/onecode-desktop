@@ -11,7 +11,7 @@
 
 use std::collections::HashMap;
 use std::io::Write;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::Instant;
 
@@ -155,6 +155,11 @@ pub struct TerminalSlot {
     /// 用户主动关闭/重启标记。
     pub closed: AtomicBool,
 
+    /// 最近一次用户输入的时间戳（ms since epoch，交互式立即刷新用）。
+    /// batcher 在用户输入后 100ms 内收到的 PTY 输出会立即推送，不等 50ms 定时器，
+    /// 避免退格/方向键等交互操作出现拖尾感。
+    pub last_input_time: AtomicU64,
+
     /// generation 计数器 — 每次 spawn/restart 递增。
     /// wait 线程记录自己启动时的 generation，仅在 generation 匹配时写入状态/自动重启。
     /// 消除 restart() 中的 sleep 竞态。
@@ -197,6 +202,7 @@ impl TerminalSlot {
             spawned_at: Mutex::new(None),
             restart_count: Mutex::new(0),
             closed: AtomicBool::new(false),
+            last_input_time: AtomicU64::new(0),
             generation: AtomicU32::new(0),
             ring_buffer: Mutex::new(RingBuffer::new(ring_buffer_max)),
             pty_master: Mutex::new(None),
@@ -207,12 +213,19 @@ impl TerminalSlot {
 
     /// 写入用户输入到 PTY（读锁级别即可，不修改结构）。
     /// 若 pty_writer 为 None（中毒恢复后或 slot 未就绪），返回 NotConnected 错误。
+    /// 写入成功后更新 last_input_time，供 batcher 交互式立即刷新判断。
     pub fn write(&self, data: &[u8]) -> std::io::Result<()> {
         let mut writer = recover_lock!(self.pty_writer.lock(), "pty_writer");
         match writer.as_mut() {
             Some(w) => {
                 w.write_all(data)?;
                 w.flush()?;
+                // 记录用户输入时间戳（ms since epoch），batcher 据此判断交互式响应
+                let now_ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64;
+                self.last_input_time.store(now_ms, Ordering::Relaxed);
                 Ok(())
             }
             None => Err(std::io::Error::new(

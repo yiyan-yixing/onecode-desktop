@@ -11,6 +11,7 @@ import { MentionController } from './mention.js';
 import * as ipc from '../ipc-bridge.js';
 
 const AUTOSAVE_DEBOUNCE_MS = 350;
+const INTERACTIVE_BYTES = 256; // 交互式小数据阈值：<256B 直接写入不等 rAF
 
 // Cached backend install hints (populated from listBackends IPC)
 // Avoids hardcoding which would drift from server-side BackendInfo.install_hint.
@@ -124,12 +125,25 @@ export class TabManager {
     // term.write() 每次调用都触发 ANSI 解析 + canvas 重绘。
     // 在 33ms flush 间隔内可能多次 Channel.onmessage，合并到下一帧写入
     // 可大幅减少重绘次数（从 N 次/帧 → 1 次/帧）。
+    // ★ 交互式响应（用户输入后 100ms 内的小数据）直接写入 — 低延迟。
+    // ★ 非交互式输出（Claude Code spinner 等）走 rAF — 释放主线程处理按键。
     let _inactiveBuffer = [];
     let _writeBatch = [];
     let _writeRaf = null;
     const onData = (bytes) => {
       if (this.activeId === id) {
         _writeBatch.push(bytes);
+        const byteLen = bytes.length || bytes.byteLength || 0;
+        // ★ 快速路径：仅在用户刚输入（<100ms）且数据量小时直接写入
+        // 根因：Claude Code spinner 每 50ms 输出 ~90B，若全部直写 term.write()，
+        //   主线程持续被 ANSI 解析+重绘占用 → keydown 事件延迟 → 退格卡顿。
+        //   限制直写仅对用户输入的响应，其他输出走 rAF 合并，释放主线程。
+        const isInputResponse = term._lastKeyTime && (performance.now() - term._lastKeyTime) < 100;
+        if (_writeBatch.length === 1 && isInputResponse && byteLen < INTERACTIVE_BYTES) {
+          term.write(bytes);
+          _writeBatch = [];
+          return;
+        }
         if (!_writeRaf) {
           _writeRaf = requestAnimationFrame(() => {
             // 合并所有缓冲块为一次 write — 减少 ANSI 解析 + 重绘次数
@@ -250,6 +264,8 @@ export class TabManager {
       _lastPtyData = data;
       _lastPtyTime = now;
       _lastPtySource = source;
+      // 记录按键时刻到 term 实例，供 onData 端到端计算
+      term._lastKeyTime = performance.now();
       ipc.ptyWrite(id, data).catch((e) => {
         console.warn(`[ptyWrite] failed for ${id}:`, e);
       });
@@ -271,8 +287,19 @@ export class TabManager {
 
       // ★ onData 内部去重：keydown/_inputEvent/_handleAnyTextareaChanges 双发
       // 现在比较的是过滤后的数据，确保 "women" === "women" → 正确去重
+      //
+      // ★★★ 关键修复：去重窗口从 200ms 缩短为 30ms ★★★
+      // 根因：200ms 窗口会吞噬快速重复按键（退格、方向键等）。
+      //   用户按住退格时，xterm 每 33-50ms 触发一次 onData("\x7f")，
+      //   200ms 窗口内所有相同数据都被当作"xterm 内部重复"丢弃 → 退格极慢。
+      //   xterm 内部双发（keydown + input 同 tick）间隔 <5ms，30ms 足够覆盖。
+      //
+      // IME 兼容：compositionend 后 300ms 内仍用 200ms 窗口。
+      //   Caps Lock 场景下 compositionend → input → keydown 事件链跨度 ~100ms，
+      //   需要更长窗口去重。ptyWriteDedup 的 source 检查作为第二层防线。
       const now = Date.now();
-      const isXtermDup = data === term._xtermSentData && (now - term._xtermSentTime) < 200;
+      const dedupWindow = (term._compositionEndedAt && (now - term._compositionEndedAt) < 300) ? 200 : 30;
+      const isXtermDup = data === term._xtermSentData && (now - term._xtermSentTime) < dedupWindow;
       if (isXtermDup) {
         return; // xterm 内部重复 → 丢弃
       }
@@ -348,11 +375,19 @@ export class TabManager {
     this.orbital.setActive(id);
     const st = this.tabs.get(id);
     if (st) {
+      // 保存当前滚动位置，防止 fit+flushInactiveBuffer 导致位置跳到底部
+      const savedViewportY = st.term.buffer.active.viewportY;
       // 刷入非活跃期间缓冲的 PTY 输出（避免切换后内容缺失）
       if (st._flushInactiveBuffer) st._flushInactiveBuffer();
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
           try { st.fitAddon.fit(); } catch (_) {}
+          // 恢复滚动位置（fit 可能因 resize 改变 buffer 结构导致 ydisp 重置）
+          if (savedViewportY != null && st.term.buffer.active.viewportY !== savedViewportY) {
+            // 确保不超出新的 ybase 上限
+            const maxY = st.term.buffer.active.ybase;
+            st.term.scrollToLine(Math.min(savedViewportY, maxY));
+          }
           st.scrollThumb.update();
           st.term.focus();
         });
@@ -408,12 +443,20 @@ export class TabManager {
     // ── 构造带 rAF 合并的 onData 回调（复用 createTab 的逻辑）──
     // 重启后必须走 rAF 合并，否则每个 Channel.onmessage 直写 term.write
     // 导致快速输出时每次都触发 ANSI 解析 + canvas 重绘，严重卡顿
+    // ★ 交互式响应（用户输入后 100ms 内的小数据）直接写入 — 低延迟。
     let _inactiveBuffer = st._inactiveBuffer || [];
     let _writeBatch = [];
     let _writeRaf = null;
     const rafOnData = (bytes) => {
       if (this.activeId === id) {
         _writeBatch.push(bytes);
+        const byteLen = bytes.length || bytes.byteLength || 0;
+        const isInputResponse = st.term._lastKeyTime && (performance.now() - st.term._lastKeyTime) < 100;
+        if (_writeBatch.length === 1 && isInputResponse && byteLen < INTERACTIVE_BYTES) {
+          st.term.write(bytes);
+          _writeBatch = [];
+          return;
+        }
         if (!_writeRaf) {
           _writeRaf = requestAnimationFrame(() => {
             if (_writeBatch.length === 1) {
