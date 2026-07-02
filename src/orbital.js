@@ -84,8 +84,10 @@ export class OrbitalController {
     const projectBtn = document.createElement('button');
     projectBtn.className = 'orbital-action-btn';
     projectBtn.innerHTML =
-      `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px"><path d="M2 4h12v9H2z"/><path d="M2 4l3-2h6l3 2"/></svg>` +
-      `New Project`;
+      `<div class="project-icon" style="background:var(--sand);color:var(--tx-warm3)">` +
+      `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="width:12px;height:12px"><line x1="8" y1="3" x2="8" y2="13"/><line x1="3" y1="8" x2="13" y2="8"/></svg>` +
+      `</div>` +
+      `<div class="project-info"><div class="project-name">New Project</div></div>`;
     projectBtn.addEventListener('click', () => this._newProject());
     projectPanel.appendChild(projectBtn);
 
@@ -112,7 +114,11 @@ export class OrbitalController {
 
   async _doLoadProjects() {
     const container = this._projectListView.querySelector('.project-list');
-    if (container) {
+    if (!container) return;
+
+    // ★ 静默刷新：不显示 loading 占位，避免切换 tab 时项目列表闪烁
+    // 仅在首次加载（容器为空）时显示 loading
+    if (container.children.length === 0) {
       container.innerHTML = '<div class="fe-loading">加载中…</div>';
     }
 
@@ -259,6 +265,11 @@ export class OrbitalController {
         }
         termList.appendChild(orb);
       });
+    }
+
+    // Restore active project card after DOM rebuild
+    if (this.tm && this.tm.activeId) {
+      this.setActive(this.tm.activeId);
     }
   }
 
@@ -507,6 +518,17 @@ export class OrbitalController {
     this.el.querySelectorAll('.orb').forEach((o) => {
       o.classList.toggle('active', o.dataset.id === id);
     });
+    // Mark the project card that contains the active orb
+    this.el.querySelectorAll('.project-card').forEach((c) => {
+      c.classList.remove('active');
+    });
+    if (id && this.tm) {
+      const st = this.tm.tabs.get(id);
+      if (st && st.projectId) {
+        const projCard = this.el.querySelector(`.project-card[data-project-id="${st.projectId}"]`);
+        if (projCard) projCard.classList.add('active');
+      }
+    }
   }
 
   updateOrbStatus(id, status) {

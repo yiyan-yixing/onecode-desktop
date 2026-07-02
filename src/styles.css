@@ -170,6 +170,16 @@ body::before {
   pointer-events: none;
 }
 
+/* ── Sidebar toggle active state ── */
+
+#sidebarToggle.on .sb-left {
+  fill: var(--tx-warm2);
+}
+
+#sidebarToggle:not(.on) .sb-left {
+  fill: none;
+}
+
 /* ══════════ Main Content — Terminal + Sidebar ══════════ */
 
 .content {
@@ -344,24 +354,28 @@ body::before {
 .orbital-action-btn {
   display: flex;
   align-items: center;
-  gap: 5px;
-  margin: 6px 8px 2px;
-  padding: 5px 10px;
-  border: 1px dashed var(--clay);
+  gap: 6px;
+  margin: 2px 4px;
+  padding: 7px 8px;
+  border: none;
   border-radius: 6px;
   background: transparent;
-  color: var(--tx-warm4);
+  color: var(--tx-warm2);
   font: 11px/1 var(--font-ui);
-  font-weight: 500;
+  font-weight: 600;
   cursor: pointer;
-  transition: all var(--dur-fast) var(--ease-out);
+  transition: background var(--dur-fast) var(--ease-out);
   flex-shrink: 0;
+  width: 100%;
+  text-align: left;
 }
 
 .orbital-action-btn:hover {
-  color: var(--em);
-  border-color: var(--em);
-  background: var(--em-soft);
+  background: var(--sand);
+}
+
+.orbital-action-btn:hover .project-icon {
+  transform: scale(1.08);
 }
 
 .orbital-action-btn svg {
@@ -374,8 +388,8 @@ body::before {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 5px 8px;
-  margin: 0 4px;
+  padding: 7px 8px;
+  margin: 2px 4px;
   border-radius: 6px;
   cursor: pointer;
   transition: background var(--dur-fast) var(--ease-out);
@@ -386,8 +400,13 @@ body::before {
 }
 
 .project-card.active {
-  background: var(--em-soft);
-  box-shadow: 0 0 0 1px rgba(5,150,105,.15);
+  background: var(--sand);
+  border-left: 2px solid var(--tx-warm4);
+  padding-left: 6px;
+}
+
+.project-card.active .project-name {
+  color: var(--tx-warm);
 }
 
 .project-icon {

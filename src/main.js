@@ -87,7 +87,10 @@ async function init() {
   ripple.init();
   tabManager.onChange = (tm) => {
     updateStatusbar(tm);
-    orbital._loadProjects(); // refresh project list (hides cards with no terminals)
+    // 切 tab 时只更新 active 状态，不触发全量 DOM 重建（避免闪烁）
+    orbital.setActive(tm.activeId);
+    // 定期刷新项目列表（项目增删时），但不阻塞切换体验
+    orbital._loadProjects();
     // 同步文件浏览器 cwd（右侧面板展开时）
     const filePanel = document.getElementById('filePanel');
     if (filePanel && !filePanel.classList.contains('collapsed') && fileExplorer) {
@@ -132,7 +135,13 @@ async function init() {
   // Sidebar toggle button in titlebar
   document.getElementById('sidebarToggle')?.addEventListener('click', () => {
     const sidebar = document.getElementById('orbital');
-    if (sidebar) sidebar.classList.toggle('collapsed');
+    const btn = document.getElementById('sidebarToggle');
+    if (sidebar) {
+      sidebar.classList.toggle('collapsed');
+      const isOpen = !sidebar.classList.contains('collapsed');
+      btn?.classList.toggle('on', isOpen);
+      btn?.setAttribute('aria-expanded', String(isOpen));
+    }
   });
 
   // File panel toggle button in titlebar
@@ -236,7 +245,13 @@ function initKeybindings(tm) {
     if (e[mod] && e.key.toLowerCase() === 'b') {
       e.preventDefault();
       const sidebar = document.getElementById('orbital');
-      if (sidebar) sidebar.classList.toggle('collapsed');
+      const btn = document.getElementById('sidebarToggle');
+      if (sidebar) {
+        sidebar.classList.toggle('collapsed');
+        const isOpen = !sidebar.classList.contains('collapsed');
+        btn?.classList.toggle('on', isOpen);
+        btn?.setAttribute('aria-expanded', String(isOpen));
+      }
       return;
     }
     // Cmd+Shift+F → open file panel
