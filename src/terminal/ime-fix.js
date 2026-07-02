@@ -34,6 +34,14 @@
 //     下一个非 229 keydown 仍然拦截（这是导致 composition 结束的那个按键），
 //     拦截后重置标志。这覆盖了 Caps Lock、Enter、空格等所有中断键。
 //
+//   ⚠️ 关键约束：xterm 的 keydown capture handler 在 initImeFix 之前注册
+//     （因为 _bindKeys 在 term.open() 中执行，initImeFix 在之后调用），
+//     所以 xterm 的 handler 先执行。stopImmediatePropagation 只能阻止
+//     在我们之后注册的 handler，无法阻止已经执行过的 xterm handler。
+//     因此 Fix 2 的 keydown 拦截在 _compositionJustEnded 场景下
+//     无法阻止 xterm 的 _finalizeComposition(false)。
+//     需要依赖 Fix 7 在发送路径上去重。
+//
 //   补充（keypress 拦截）：
 //     Fix 2 只拦截了 keydown，但 keypress 仍然触发。xterm 的 _keyPress
 //     检查 _keyDownHandled（由 _keyDown 设置），因 keydown 被阻止所以
@@ -67,15 +75,6 @@
 //         重复输出。例：输入"我们"后按空格 → textarea 有"我们 " →
 //         Fix 3 发送"我们 " → 终端显示"我们我们 "。
 //
-//   错误方案尝试：
-//     v2: 清空 textarea + 手动发送 → xterm 也发送 → 双重输出
-//     v3: 清空 textarea 不发送 → xterm 的 _handleAnyTextareaChanges()
-//         检测到 textarea 从有内容变空，认为用户删除了所有文字 →
-//         发退格序列 → 中文被立即删除 → "无法输入中文"
-//     v4: stopImmediatePropagation + 手动发送 → xterm 的 handler
-//         注册在先（同元素同目标按注册顺序执行），我们的 handler 在后
-//         → 无法阻止已经执行过的 xterm handler → 仍然双重输出
-//
 //   正确方案 (v5): 不清空 textarea，不在 compositionend 中手动发送。
 //         xterm 的 CompositionHandler 通过 onData 正常发送组合结果。
 //         我们在 compositionend 中只记录 _lastCompositionText。
@@ -99,6 +98,19 @@
 //         NBSP (160) → 字符串比较 === 不匹配 → 所有去重机制失效 → 空格双发。
 //   修复：在 Fix 3 input handler 入口，将 ta.value 中的 NBSP 替换为标准空格
 //         后再做比较和发送，使 Fix 4 去重和 ptyWriteDedup 跨源去重正确匹配。
+//
+// 修复 7: Caps Lock 双发修复（compositionend → input → keydown 三连事件去重）
+//   根因：macOS 上按 Caps Lock 切换输入法时，完整事件链为：
+//     1. compositionend → xterm _finalizeComposition(true) → 安排 setTimeout(0) 发送
+//     2. input 事件（IME 提交文本到 textarea）→ Fix 3 捕获并发送
+//     3. Caps Lock keydown → xterm _finalizeComposition(false) → 立即发送
+//     4. setTimeout(0) 被步骤 3 取消（_isSendingComposition = false）
+//   结果：步骤 2 和步骤 3 都发送拼音 → "womenwomen"
+//   修复：(a) _lastCompositionText 也做 NBSP 统一，确保 Fix 5 比较正确匹配
+//         (b) compositionend 后 200ms 内，如果 Fix 3 检测到 ta.value 与
+//             _lastCompositionText 匹配（NBSP 统一后），视为 IME 回写，
+//             跳过发送（xterm 会通过 _finalizeComposition 发送）
+//         (c) 扩大 ptyWriteDedup 去重窗口（30ms → 200ms），覆盖完整事件链
 
 export function initImeFix(term, termEl) {
   const ta = term.textarea || (term.element && term.element.querySelector('textarea'));
@@ -199,14 +211,14 @@ export function initImeFix(term, termEl) {
     }
   }, true);
 
-  // ── 修复 3 + 修复 4 + 修复 5 + 修复 6: IME 直接字符插入捕获 + 去重 + 剥离前缀 + NBSP 统一 ──
+  // ── 修复 3 + 4 + 5 + 6 + 7: IME 直接字符插入捕获 + 去重 + 剥离前缀 + NBSP 统一 + Caps Lock 双发修复 ──
   //
   // ★ 核心问题: WKWebView 中 keydown 的 preventDefault() 无法阻止字符插入 textarea，
   // xterm 的 _inputEvent handler (textarea capture) 会再次 triggerDataEvent → 重复输出。
   // 解决方案: 不依赖在 termEl 上 stopImmediatePropagation 阻止 xterm（因为 textarea
   // 和 termEl 是不同元素，stop 在 termEl 上无法阻止 textarea 上的 handler），
   // 而是在 tab-manager.js 的 ptyWriteDedup 中统一去重——onData 和 _imeSendFn
-  // 两条路径汇合到同一个去重函数，30ms 窗口内相同数据只写一次 PTY。
+  // 两条路径汇合到同一个去重函数，200ms 窗口内相同数据只写一次 PTY。
   if (termEl) {
     termEl.addEventListener('input', (e) => {
       if (e.isComposing || e.inputType === 'insertCompositionText') return;
@@ -215,16 +227,26 @@ export function initImeFix(term, termEl) {
       let value = ta.value;
       if (!value) return;
 
-      // ★ 修复 6: NBSP → 标准空格统一
+      // ★ 修复 6: NBSP (U+00A0) → 标准空格 (U+0020) 统一
       // 根因：IME 激活时 WKWebView 的 textarea 将空格键映射为不间断空格
       // U+00A0 (charCode 160) 而非标准空格 U+0020 (charCode 32)。
       // xterm 的 onData 路径发送标准空格 (32)，Fix 3 从 ta.value 读到
-      // NBSP (160) → 字符串比较 `===` 不匹配 → 所有去重机制失效 → 空格双发。
+      // NBSP (160) → 字符串比较 === 不匹配 → 所有去重机制失效 → 空格双发。
       // 修复：将 ta.value 中的 NBSP 替换为标准空格后再做比较和发送，
       // 使 Fix 4 去重和 ptyWriteDedup 跨源去重都能正确匹配。
       value = value.replace(/ /g, ' ');
 
-      // ★ 修复 5: compositionend 后，textarea 可能仍包含组合文本 + 新字符
+      // ★ 修复 7 / 修复 5 改进: _lastCompositionText 也做 NBSP 统一
+      // 根因：compositionend 时记录的 _lastCompositionText 可能包含 NBSP (U+00A0)，
+      //   而 Fix 6 已将 value 中的 NBSP 替换为标准空格，导致
+      //   value === _lastCompositionText 比较失败 → 跳过条件不成立 → 双发。
+      //   特别是在 Caps Lock 场景下，IME 将拼音提交到 textarea，
+      //   _lastCompositionText 记录了含 NBSP 的值，Fix 6 统一后 value 不含 NBSP，
+      //   但 _lastCompositionText 含 NBSP → 比较失败 → Fix 3 仍然发送 → 双发。
+      const lastCompNorm = _lastCompositionText.replace(/ /g, ' ');
+
+
+      // ★ 修复 5 + 7: compositionend 后，textarea 可能仍包含组合文本 + 新字符
       // 例：输入"我们"后按空格 → textarea 有"我们 " →
       //     xterm 已通过 onData 发送"我们"，Fix 3 只应发送" "
       //
@@ -233,19 +255,27 @@ export function initImeFix(term, termEl) {
       // 2. textarea 以 _lastCompositionText 开头 → 剥离前缀，只发新增部分
       // 3. _lastCompositionText 为空（已消费 / compositionstart / blur）→ 正常处理
       // 消费后清除 _lastCompositionText，防止后续 input 事件重复剥离。
+      //
+      // ★ 修复 7 改进：使用 NBSP 统一后的 lastCompNorm 做比较
       if (_lastCompositionText) {
-        if (value === _lastCompositionText) {
-          // IME 回写，与组合文本完全相同 → 跳过并清空
+        if (value === lastCompNorm) {
+          // IME 回写，与组合文本完全相同 → 跳过
+          // ★ 不清空 textarea！xterm 的 _finalizeComposition(false) 需要
+          //   从 textarea 读取数据来发送。清空会导致拼音丢失。
+          // ★ 不手动发送：xterm 会通过 _finalizeComposition 路径发送。
           _lastCompositionText = '';
-          ta.value = '';
           return;
         }
-        if (value.startsWith(_lastCompositionText)) {
+        if (value.startsWith(lastCompNorm)) {
           // 剥离组合文本前缀，只处理新增部分
-          const newData = value.slice(_lastCompositionText.length);
+          const newData = value.slice(lastCompNorm.length);
           _lastCompositionText = '';
           ta.value = '';
           if (!newData) return;
+          // ★ 修复 7 补充: 拼音空格过滤（与 Fix 3 主路径和 onData 路径一致）
+          if (/^[a-zA-Z0-9]+( +[a-zA-Z0-9]+)+$/.test(newData)) {
+            newData = newData.replace(/ +/g, '');
+          }
           // 新增部分通过 Fix 4 去重检查后发送
           const now = Date.now();
           if (newData === term._xtermSentData && (now - term._xtermSentTime) < 100) {
@@ -267,6 +297,16 @@ export function initImeFix(term, termEl) {
       if (value === term._xtermSentData && (now - term._xtermSentTime) < 100) {
         ta.value = '';
         return;
+      }
+
+      // ★ 修复 7 补充: 拼音空格过滤（与 tab-manager.js onData 路径一致）
+      // 根因：IME 提交拼音到 textarea 时，文本含空格（如 "wo men"），
+      //   Fix 3 原样发送 "wo men"，但 onData 路径过滤后发送 "women"。
+      //   ptyWriteDedup 比较 "wo men" !== "women" → 去重失败 → 双发。
+      //   在 Fix 3 也应用相同的拼音空格过滤，确保两条路径发送一致的数据。
+      // 安全性：正常英文逐字符发送不会触发此正则（需多词+空格才匹配）。
+      if (/^[a-zA-Z0-9]+( +[a-zA-Z0-9]+)+$/.test(value)) {
+        value = value.replace(/ +/g, '');
       }
 
       // ★ 修复 3: IME 直接插入字符

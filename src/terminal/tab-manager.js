@@ -234,15 +234,18 @@ export class TabManager {
     // 根因: WKWebView 中 keydown 的 preventDefault() 无法阻止字符插入 textarea，
     // xterm 的 _inputEvent handler 会再次 triggerDataEvent 发送相同字符 → 重复。
     // _imeSendFn 路径 (IME Shift+符号等) 和 onData 路径 (xterm keydown/_inputEvent)
-    // 都汇合到此去重。只在不同来源(imeSendFn vs onData) 30ms 内发送相同数据时去重，
+    // 都汇合到此去重。只在不同来源(imeSendFn vs onData) 200ms 内发送相同数据时去重，
     // 同一来源的连续相同输入（如按两次 l）不去重。
+    // ★ 修复 7: 窗口从 30ms 扩大到 200ms，覆盖 Caps Lock 场景下
+    // compositionend → input → keydown 的完整事件链（~100ms）。
     let _lastPtyData = '';
     let _lastPtyTime = 0;
     let _lastPtySource = '';
     const ptyWriteDedup = (data, source) => {
       const now = Date.now();
-      if (data === _lastPtyData && (now - _lastPtyTime) < 30 && source !== _lastPtySource) {
-        return; // 不同来源 30ms 内重复 → 丢弃
+      const isDup = data === _lastPtyData && (now - _lastPtyTime) < 200 && source !== _lastPtySource;
+      if (isDup) {
+        return; // 不同来源 200ms 内重复 → 丢弃
       }
       _lastPtyData = data;
       _lastPtyTime = now;
@@ -256,26 +259,22 @@ export class TabManager {
     term._imeSendFn = (data) => ptyWriteDedup(data, 'ime');
 
     const dataDisposable = term.onData((data) => {
-      // ★ onData 内部去重：keydown/_inputEvent/_handleAnyTextareaChanges 双发
-      // 根因: WKWebView 中 preventDefault() 无法阻止字符插入 textarea，
-      // xterm 的 _inputEvent handler 在 keydown 之后再次 triggerDataEvent →
-      // 同一字符通过 onData 被调用两次。
-      // 另外 _handleAnyTextareaChanges 用 setTimeout(0) 延迟发送，也可能
-      // 与 _imeSendFn 路径重复。
-      // 判断依据: 如果当前 data 与 _xtermSentData 相同且间隔 <50ms，
-      // 说明是 xterm 内部重复发送，丢弃。
-      // 合法快速连击间隔 >60ms（人类最快击键 ~150ms）。
-      const now = Date.now();
-      if (data === term._xtermSentData && (now - term._xtermSentTime) < 50) {
-        return; // xterm 内部重复 → 丢弃
-      }
-
+      // ★ 修复 7: 先过滤再去重！
+      // 根因：IME 提交的拼音 "wo men" 过滤后变成 "women"，但 _xtermSentData
+      //   去重检查在过滤前执行，比较 raw "wo men" vs filtered "women" → 不匹配 →
+      //   去重失败 → 双发。修复：先应用拼音空格过滤，再做 _xtermSentData 比较。
       // ★ 修复 5: onData 路径过滤 IME 拼音空格（不限 recentlyComposed）
-      // xterm 的 _handleAnyTextareaChanges() setTimeout 可能比 compositionend
-      // 事件先执行 → recentlyComposed 仍为 false → 必须无条件过滤。
       // 安全性：正常英文逐字符发送，不会一次发送 "wo men" 这样的多词块。
       if (/^[a-zA-Z0-9]+( +[a-zA-Z0-9]+)+$/.test(data)) {
         data = data.replace(/ +/g, '');
+      }
+
+      // ★ onData 内部去重：keydown/_inputEvent/_handleAnyTextareaChanges 双发
+      // 现在比较的是过滤后的数据，确保 "women" === "women" → 正确去重
+      const now = Date.now();
+      const isXtermDup = data === term._xtermSentData && (now - term._xtermSentTime) < 200;
+      if (isXtermDup) {
+        return; // xterm 内部重复 → 丢弃
       }
 
       // ★ 修复 4: 记录过滤后的数据，供 ime-fix.js Fix 3 去重
@@ -473,7 +472,7 @@ export class TabManager {
         let _lastPtySourceReal = '';
         const ptyWriteDedupReal = (data, source) => {
           const now = Date.now();
-          if (data === _lastPtyDataReal && (now - _lastPtyTimeReal) < 30 && source !== _lastPtySourceReal) {
+          if (data === _lastPtyDataReal && (now - _lastPtyTimeReal) < 200 && source !== _lastPtySourceReal) {
             return;
           }
           _lastPtyDataReal = data;
@@ -484,15 +483,15 @@ export class TabManager {
           });
         };
         const dataDisposable = st.term.onData((data) => {
-          // ★ onData 内部去重：keydown/_inputEvent/_handleAnyTextareaChanges 双发
-          const now = Date.now();
-          if (data === st.term._xtermSentData && (now - st.term._xtermSentTime) < 50) {
-            return;
-          }
-
-          // ★ 修复 5: onData 路径过滤 IME 拼音空格（不限 recentlyComposed）
+          // ★ 修复 7: 先过滤再去重（与 createTab 中 onData handler 一致）
           if (/^[a-zA-Z0-9]+( +[a-zA-Z0-9]+)+$/.test(data)) {
             data = data.replace(/ +/g, '');
+          }
+
+          // ★ onData 内部去重：比较过滤后的数据
+          const now = Date.now();
+          if (data === st.term._xtermSentData && (now - st.term._xtermSentTime) < 200) {
+            return;
           }
 
           // ★ 修复 4: 记录过滤后的数据，供 ime-fix.js Fix 3 去重
