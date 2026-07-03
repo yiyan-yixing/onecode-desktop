@@ -349,6 +349,22 @@ body::before {
   border-right: none;
 }
 
+/* ── Right Sidebar mirror ── */
+
+.sidebar-right {
+  border-right: none;
+  border-left: 1px solid var(--sand);
+  direction: rtl;
+}
+
+.sidebar-right > * {
+  direction: ltr;
+}
+
+.sidebar-right.collapsed {
+  border-left: none;
+}
+
 /* ── Sidebar Action Button (New Project) ── */
 
 .orbital-action-btn {
@@ -1530,6 +1546,20 @@ body::before {
 
 .fe-error {
   color: #ef4444;
+}
+
+/* ── Right Sidebar mirror: File Explorer ── */
+
+.sidebar-right .fe-toolbar {
+  flex-direction: row-reverse;
+}
+
+.sidebar-right .fe-item {
+  flex-direction: row-reverse;
+}
+
+.sidebar-right .fe-size {
+  text-align: left;
 }
 
 /* ── 预览面板 ── */
