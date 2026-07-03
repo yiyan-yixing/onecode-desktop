@@ -28,8 +28,8 @@ use tokio::sync::RwLock;
 use uuid::Uuid;
 
 use crate::config::AppConfig;
-use crate::recover_lock;
 use crate::events;
+use crate::recover_lock;
 
 /// PTY 初始尺寸（对齐 pty.js DEFAULT_COLS/ROWS）
 const DEFAULT_COLS: u16 = 200;
@@ -117,7 +117,7 @@ impl MultiPtyManager {
     // ── 结构变更：写锁 ──────────────────────────────────────────────
 
     /// 创建新终端。返回 slot id。
-#[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     pub async fn spawn(
         &self,
         cmd: String,
@@ -141,7 +141,9 @@ impl MultiPtyManager {
         let id = Uuid::new_v4();
         let label = label.unwrap_or_else(|| "Terminal".to_string());
         let ring_max = self.config.ring_buffer_max_mb * 1024 * 1024;
-        let slot = Arc::new(TerminalSlot::new(id, label, project_id, cmd, args, cwd, env, backend, ring_max));
+        let slot = Arc::new(TerminalSlot::new(
+            id, label, project_id, cmd, args, cwd, env, backend, ring_max,
+        ));
 
         let PtyHandles {
             master,
@@ -192,7 +194,13 @@ impl MultiPtyManager {
 
     /// 手动重启：复用 cmd/args/cwd/env，清空 buffer，重置重启计数。
     /// 前端传入新的 data_channel（旧 Channel 已失效）+ 终端当前尺寸。
-    pub async fn restart(&self, id: Uuid, data_channel: Channel<Vec<u8>>, cols: Option<u16>, rows: Option<u16>) -> Result<()> {
+    pub async fn restart(
+        &self,
+        id: Uuid,
+        data_channel: Channel<Vec<u8>>,
+        cols: Option<u16>,
+        rows: Option<u16>,
+    ) -> Result<()> {
         let slot = self
             .get_slot(id)
             .await
@@ -215,7 +223,14 @@ impl MultiPtyManager {
             reader,
             child,
             pid,
-        } = create_pty(&slot.cmd, &slot.args, &slot.cwd, &slot.env, effective_cols, effective_rows)?;
+        } = create_pty(
+            &slot.cmd,
+            &slot.args,
+            &slot.cwd,
+            &slot.env,
+            effective_cols,
+            effective_rows,
+        )?;
         slot.replace_handles(master, killer, pid);
         slot.clear_buffer();
         slot.set_status(SlotStatus::Running);
@@ -356,10 +371,15 @@ impl MultiPtyManager {
                 return inner.slots.values().cloned().collect();
             }
             if attempt % 5 == 4 {
-                log::warn!("[pty] kill_all: lock still busy after {}ms", (attempt + 1) * 10);
+                log::warn!(
+                    "[pty] kill_all: lock still busy after {}ms",
+                    (attempt + 1) * 10
+                );
             }
         }
-        log::error!("[pty] kill_all: could not acquire lock after 200ms, some terminals may not be killed");
+        log::error!(
+            "[pty] kill_all: could not acquire lock after 200ms, some terminals may not be killed"
+        );
         Vec::new()
     }
 }
@@ -411,7 +431,10 @@ fn remove_auth_token_from_settings() {
         // AUTH_TOKEN 不存在，无需写入
         return;
     }
-    log::info!("[auth-fix] removing ANTHROPIC_AUTH_TOKEN from {}", path.display());
+    log::info!(
+        "[auth-fix] removing ANTHROPIC_AUTH_TOKEN from {}",
+        path.display()
+    );
     if let Ok(pretty) = serde_json::to_string_pretty(&settings) {
         let _ = std::fs::write(&path, pretty);
     }
@@ -651,7 +674,12 @@ fn start_wait(
 
         // generation 不匹配 → 说明 restart() 已递增 generation，此线程已过期
         if slot.current_generation() != my_gen {
-            log::debug!("[pty] stale wait thread gen={} current={} id={}, exiting", my_gen, slot.current_generation(), slot.id);
+            log::debug!(
+                "[pty] stale wait thread gen={} current={} id={}, exiting",
+                my_gen,
+                slot.current_generation(),
+                slot.id
+            );
             return;
         }
 
@@ -702,7 +730,14 @@ fn start_wait(
 
         // 自动重启：从旧 PTY master 读取当前尺寸，避免重启后换行/光标错位
         let pty_size = slot.get_size();
-        match create_pty(&slot.cmd, &slot.args, &slot.cwd, &slot.env, pty_size.map(|s| s.cols), pty_size.map(|s| s.rows)) {
+        match create_pty(
+            &slot.cmd,
+            &slot.args,
+            &slot.cwd,
+            &slot.env,
+            pty_size.map(|s| s.cols),
+            pty_size.map(|s| s.rows),
+        ) {
             Ok(h) => {
                 slot.replace_handles(h.master, h.killer, h.pid);
                 slot.clear_buffer();
@@ -809,9 +844,7 @@ fn resolve_locale() -> String {
             if output.status.success() {
                 let lang = String::from_utf8_lossy(&output.stdout).trim().to_string();
                 if !lang.is_empty()
-                    && (lang.contains("UTF-8")
-                        || lang.contains("utf-8")
-                        || lang.contains("utf8"))
+                    && (lang.contains("UTF-8") || lang.contains("utf-8") || lang.contains("utf8"))
                 {
                     return lang;
                 }
@@ -827,10 +860,9 @@ fn resolve_locale() -> String {
     }
 
     // 3. 尝试 macOS defaults（AppleLocale）
-    if let Ok(output) =
-        std::process::Command::new("defaults")
-            .args(["read", "-g", "AppleLocale"])
-            .output()
+    if let Ok(output) = std::process::Command::new("defaults")
+        .args(["read", "-g", "AppleLocale"])
+        .output()
     {
         if output.status.success() {
             let locale = String::from_utf8_lossy(&output.stdout).trim().to_string();

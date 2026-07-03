@@ -77,7 +77,9 @@ impl SessionStore {
             rows.iter().any(|c| c == "last_active_at")
         };
         if !has_last_active_at {
-            conn.execute_batch("ALTER TABLE terminals ADD COLUMN last_active_at TEXT NOT NULL DEFAULT ''")?;
+            conn.execute_batch(
+                "ALTER TABLE terminals ADD COLUMN last_active_at TEXT NOT NULL DEFAULT ''",
+            )?;
             log::info!("[session] migrated: added last_active_at column");
         }
         Ok(Self {
@@ -129,7 +131,9 @@ impl SessionStore {
                 args: serde_json::from_str(&args_json).unwrap_or_default(),
                 cwd: row.get(5)?,
                 env: serde_json::from_str(&env_json).unwrap_or_default(),
-                backend: row.get::<_, Option<String>>(7)?.unwrap_or_else(|| "claude-code".to_string()),
+                backend: row
+                    .get::<_, Option<String>>(7)?
+                    .unwrap_or_else(|| "claude-code".to_string()),
                 created_at: row.get(8)?,
                 last_active_at: row.get::<_, Option<String>>(9)?.unwrap_or_default(),
             })

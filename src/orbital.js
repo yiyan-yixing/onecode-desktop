@@ -3,6 +3,7 @@
 // 「文件」Tab 已移至右侧面板（#filePanel），由 FileExplorerController 独立管理。
 
 import * as ipc from './ipc-bridge.js';
+const { debugLog } = ipc;
 
 const IDENTITY_COLORS = [
   { color: 'var(--id-emerald)', glow: 'var(--glow-emerald)', hex: '#10B981' },
@@ -35,6 +36,11 @@ export class OrbitalController {
     this._projectListView = null;
     this._projectsLoaded = false;
     this._backends = []; // cached list from list_backends
+  }
+
+  /** 诊断：dump #orbital 下所有 DOM 元素（调试用） */
+  _dumpSidebar(label) {
+    // 保留接口，生产环境不输出
   }
 
   init(tm) {
@@ -136,6 +142,17 @@ export class OrbitalController {
   _renderProjectList() {
     const container = this._projectListView.querySelector('.project-list');
     if (!container) return;
+
+    // ★ 保存现有 orb DOM 元素（container.innerHTML='' 会销毁它们）
+    const savedOrbs = new Map();
+    if (this.tm && this.tm.tabs) {
+      this.tm.tabs.forEach((st) => {
+        const orb = container.querySelector(`.orb[data-id="${st.id}"]`);
+        if (orb) savedOrbs.set(st.id, orb);
+      });
+    }
+    debugLog('renderList', `orbs before clear: ${savedOrbs.size} of ${this.tm?.tabs?.size} tabs`);
+
     container.innerHTML = '';
 
     // ★ 前端去重：按 (id || name) 去重，避免同名不同 ID 的项目重复显示
@@ -207,6 +224,7 @@ export class OrbitalController {
       card.addEventListener('click', (e) => {
         if (e.target.closest('.project-more')) return;
         const projId2 = proj.id || proj.name;
+        debugLog('proj-click', `proj=${projId2} activeId=${this.tm?.activeId?.substring(0,8)}`);
         if (this.tm && this.tm.tabs) {
           // ★ 修复: 优先切换到 running tab，其次切换到 error/exited tab
           // 之前 !st.isError 导致 error tab 被跳过，每次点击都创建新终端
@@ -222,11 +240,13 @@ export class OrbitalController {
           }
           const targetId = firstRunning || firstAny;
           if (targetId) {
+            debugLog('proj-click', `found terminal=${targetId?.substring(0,8)} → switchTo`);
             this.tm.switchTo(targetId);
             return;
           }
         }
         // No terminal yet — create one, pass backend from project metadata
+        debugLog('proj-click', `no terminal for=${projId2} → createTab`);
         this.tm.createTab({ label: proj.name, cwd: proj.dir, projectId: projId2, backend: projBackend });
       });
 
@@ -250,27 +270,32 @@ export class OrbitalController {
     });
 
     // Re-attach existing project terminal orbs under their project cards
+    // ★ 使用 savedOrbs（innerHTML='' 已销毁 DOM 中的 orb）
+    let reattachedCount = 0;
     if (this.tm && this.tm.tabs) {
       this.tm.tabs.forEach((st) => {
         if (!st.projectId) return;
-        const orb = this.el.querySelector(`.orb[data-id="${st.id}"]`);
+        const orb = savedOrbs.get(st.id);
         if (!orb) return;
         const projCard = container.querySelector(`.project-card[data-project-id="${st.projectId}"]`);
         if (!projCard) return;
-        let termList = projCard.nextElementSibling;
-        if (!termList || !termList.classList.contains('project-terminals')) {
-          termList = document.createElement('div');
-          termList.className = 'project-terminals';
-          projCard.parentNode.insertBefore(termList, projCard.nextSibling);
-        }
-        termList.appendChild(orb);
+        // ★ orb 直接作为 projCard 子元素，不再用 .project-terminals 容器
+        projCard.appendChild(orb);
+        reattachedCount++;
       });
     }
+    debugLog('renderList', `reattached: ${reattachedCount} of ${savedOrbs.size} saved orbs`);
+
+    // ★ 清理残留的 .project-terminals 容器（旧版遗留）
+    container.querySelectorAll('.project-terminals').forEach((el) => el.remove());
 
     // Restore active project card after DOM rebuild
     if (this.tm && this.tm.activeId) {
       this.setActive(this.tm.activeId);
     }
+
+    // ★ 诊断：dump 完整侧边栏 DOM 树到终端
+    this._dumpSidebar('renderList done');
   }
 
   // ── New Project Dialog ──
@@ -459,10 +484,11 @@ export class OrbitalController {
       (cwdBasename ? `<div class="orb-cwd">${esc(cwdBasename)}</div>` : '') +
       `</div>`;
 
-    // Click → switch
+    // Click → switch or restart exited/crashed terminal
     orb.addEventListener('click', (e) => {
       const dot = e.target.closest('.orb-dot');
-      if (dot && status === 'exited') {
+      // 读取实时 DOM class 而非闭包捕获的 status（避免 stale 闭包）
+      if (dot && (dot.classList.contains('exited') || dot.classList.contains('crashed'))) {
         this.tm.restartTab(id);
       } else {
         this.tm.switchTo(id);
@@ -476,17 +502,10 @@ export class OrbitalController {
       this.startRename(id, labelEl);
     });
 
-    // Insert orb after the matching project card in the project list
+    // Insert orb as child of the matching project card (no separate container)
     const projCard = this.el.querySelector(`.project-card[data-project-id="${st.projectId}"]`);
     if (projCard) {
-      // Find or create a terminal list container after this project card
-      let termList = projCard.nextElementSibling;
-      if (!termList || !termList.classList.contains('project-terminals')) {
-        termList = document.createElement('div');
-        termList.className = 'project-terminals';
-        projCard.parentNode.insertBefore(termList, projCard.nextSibling);
-      }
-      termList.appendChild(orb);
+      projCard.appendChild(orb);
     } else {
       // Project card not yet rendered — append to project list
       const projectList = this._projectListView?.querySelector('.project-list');
@@ -499,7 +518,7 @@ export class OrbitalController {
   removeOrb(id) {
     const orb = this.el.querySelector(`.orb[data-id="${id}"]`);
     if (orb) {
-      const termList = orb.closest('.project-terminals');
+      orb.classList.add('exiting');
       orb.style.transition = 'opacity 200ms ease-out, max-height 200ms ease-out';
       orb.style.opacity = '0';
       orb.style.maxHeight = '0';
@@ -507,8 +526,7 @@ export class OrbitalController {
       orb.style.padding = '0 12px';
       setTimeout(() => {
         orb.remove();
-        // Clean up empty terminal list container
-        if (termList && termList.children.length === 0) termList.remove();
+        this._updateEmptyState();
       }, 200);
     }
     this._updateEmptyState();
@@ -667,10 +685,13 @@ export class OrbitalController {
     const items = [];
 
 
-    // 关闭 — 仅在有终端时显示
+    // 关闭 — 仅在有终端时显示；>=3 时弹确认
     if (termIds.length > 0) {
-      items.push({ label: `关闭（${termIds.length} 个终端）`, cls: 'danger', action: () => {
-        [...termIds].forEach(tid => this.tm.closeTab(tid));
+      items.push({ label: `关闭（${termIds.length} 个终端）`, cls: 'danger', action: async () => {
+        if (termIds.length >= 3 && !await this._confirmDialog(`确定关闭 ${termIds.length} 个终端？`)) return;
+        for (const tid of [...termIds]) {
+          await this.tm.closeTab(tid);
+        }
       }});
     }
 

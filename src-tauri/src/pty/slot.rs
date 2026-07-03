@@ -173,7 +173,7 @@ pub struct TerminalSlot {
 }
 
 impl TerminalSlot {
-#[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         id: Uuid,
         label: String,
@@ -286,7 +286,8 @@ impl TerminalSlot {
     /// 标记此终端为当前活跃（前端 switchTo 时调用）。
     /// 时间戳写入 last_active_at，供 session 恢复时定位上次使用的终端。
     pub fn touch_active(&self) {
-        *recover_lock!(self.last_active_at.lock(), "last_active_at") = chrono::Utc::now().to_rfc3339();
+        *recover_lock!(self.last_active_at.lock(), "last_active_at") =
+            chrono::Utc::now().to_rfc3339();
     }
 
     pub fn label(&self) -> String {

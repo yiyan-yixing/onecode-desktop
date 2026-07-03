@@ -393,6 +393,7 @@ body::before {
   border-radius: 6px;
   cursor: pointer;
   transition: background var(--dur-fast) var(--ease-out);
+  flex-wrap: wrap; /* orb 作为子元素时可换行 */
 }
 
 .project-card:hover {
@@ -407,6 +408,22 @@ body::before {
 
 .project-card.active .project-name {
   color: var(--tx-warm);
+}
+
+/* 项目卡片内的 orb — 缩进对齐，独占一行 */
+.project-card .orb {
+  padding: 2px 6px;
+  margin: 0 10px;
+  flex-basis: calc(100% - 10px);
+}
+
+.project-card .orb .orb-cwd {
+  font-size: 10px;
+}
+
+/* 关闭动画中的 orb 直接隐藏，不留残余空间 */
+.project-card .orb.exiting {
+  display: none;
 }
 
 .project-icon {
@@ -521,21 +538,6 @@ body::before {
   text-align: center;
   color: var(--tx-warm4);
   font-size: 11px;
-}
-
-.project-terminals {
-  margin-left: 6px;
-  border-left: 1px solid var(--sand);
-  padding-left: 3px;
-}
-
-.project-terminals .orb {
-  padding: 3px 6px;
-  margin: 0;
-}
-
-.project-terminals .orb .orb-cwd {
-  font-size: 10px;
 }
 
 /* ── Sidebar section label ── */

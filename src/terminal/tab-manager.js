@@ -9,6 +9,7 @@ import { ScrollThumb } from './scroll-thumb.js';
 import { initImeFix } from './ime-fix.js';
 import { MentionController } from './mention.js';
 import * as ipc from '../ipc-bridge.js';
+const { debugLog } = ipc;
 
 const AUTOSAVE_DEBOUNCE_MS = 350;
 const INTERACTIVE_BYTES = 256; // 交互式小数据阈值：<256B 直接写入不等 rAF
@@ -220,7 +221,12 @@ export class TabManager {
         id, label, cmd: opts.cmd, args: opts.args, cwd: opts.cwd, env: opts.env,
         projectId: opts.projectId || null, backend,
         term, fitAddon, scrollThumb, termEl,
-        mention: null, unlistenExit: null, status: 'exited', isError: true,
+        mention: null, unlistenExit: null, unlistenRestart: null,
+        dataDisposable: null, resizeDisposable: null,
+        status: 'exited', isError: true,
+        _writeRaf: null, _writeBatch: [], onData: null,
+        _inactiveBuffer: [], _flushInactiveBuffer: null,
+        _closing: false,
       });
       this.order.push(id);
       this._scheduleSave();
@@ -230,6 +236,8 @@ export class TabManager {
     termEl.dataset.id = id;
 
     const unlistenExit = ipc.onPtyExit(id, (code) => {
+      const st = this.tabs.get(id);
+      if (st && st._closing) return; // closeTab 已在处理，忽略退出事件
       this.updateStatus(id, 'exited', code);
     });
 
@@ -364,35 +372,34 @@ export class TabManager {
   }
 
   switchTo(id) {
-    for (const [tid, st] of this.tabs) {
+    const st = this.tabs.get(id);
+    if (!st) return;
+    for (const [tid, st2] of this.tabs) {
       if (tid === id) {
-        st.termEl.classList.add('active');
+        st2.termEl.classList.add('active');
       } else {
-        st.termEl.classList.remove('active');
-        if (st.mention) st.mention.hide();
+        st2.termEl.classList.remove('active');
+        if (st2.mention) st2.mention.hide();
       }
     }
     this.orbital.setActive(id);
-    const st = this.tabs.get(id);
-    if (st) {
-      // 保存当前滚动位置，防止 fit+flushInactiveBuffer 导致位置跳到底部
-      const savedViewportY = st.term.buffer.active.viewportY;
-      // 刷入非活跃期间缓冲的 PTY 输出（避免切换后内容缺失）
-      if (st._flushInactiveBuffer) st._flushInactiveBuffer();
+    // 保存当前滚动位置，防止 fit+flushInactiveBuffer 导致位置跳到底部
+    const savedViewportY = st.term.buffer.active.viewportY;
+    // 刷入非活跃期间缓冲的 PTY 输出（避免切换后内容缺失）
+    if (st._flushInactiveBuffer) st._flushInactiveBuffer();
+    requestAnimationFrame(() => {
       requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          try { st.fitAddon.fit(); } catch (_) {}
-          // 恢复滚动位置（fit 可能因 resize 改变 buffer 结构导致 ydisp 重置）
-          if (savedViewportY != null && st.term.buffer.active.viewportY !== savedViewportY) {
-            // 确保不超出新的 ybase 上限
-            const maxY = st.term.buffer.active.ybase;
-            st.term.scrollToLine(Math.min(savedViewportY, maxY));
-          }
-          st.scrollThumb.update();
-          st.term.focus();
-        });
+        try { st.fitAddon.fit(); } catch (_) {}
+        // 恢复滚动位置（fit 可能因 resize 改变 buffer 结构导致 ydisp 重置）
+        if (savedViewportY != null && st.term.buffer.active.viewportY !== savedViewportY) {
+          // 确保不超出新的 ybase 上限
+          const maxY = st.term.buffer.active.ybase;
+          st.term.scrollToLine(Math.min(savedViewportY, maxY));
+        }
+        st.scrollThumb.update();
+        st.term.focus();
       });
-    }
+    });
     this.activeId = id;
     // 标记此终端为活跃（更新 last_active_at 时间戳，供 session 恢复）
     ipc.ptySetActive(id).catch(() => {});
@@ -401,7 +408,14 @@ export class TabManager {
 
   async closeTab(id) {
     const st = this.tabs.get(id);
-    if (!st) return;
+    if (!st || st._closing) return;
+    st._closing = true;
+
+    // ── 取消挂起的 rAF 回调，防止 dispose 后访问已释放的 term ──
+    if (st._writeRaf) { cancelAnimationFrame(st._writeRaf); st._writeRaf = null; }
+    st._writeBatch = [];
+    st.onData = null; // 断开 Channel.onmessage → onData 引用，防止闭包泄漏
+
     // Skip ptyKill for error tabs — their id is not a valid PTY UUID
     if (!st.isError) {
       try { await ipc.ptyKill(id); } catch (e) {
@@ -416,20 +430,20 @@ export class TabManager {
     try { if (st.resizeDisposable) st.resizeDisposable.dispose(); } catch (_) {}
     try { st.term.dispose(); } catch (_) {}
     st.termEl.remove();
-    try { st.unlistenExit(); } catch (_) {}
-    try { st.unlistenRestart(); } catch (_) {}
+    try { if (st.unlistenExit) st.unlistenExit(); } catch (_) {}
+    try { if (st.unlistenRestart) st.unlistenRestart(); } catch (_) {}
     this.tabs.delete(id);
     this.order = this.order.filter((x) => x !== id);
-    this.orbital.removeOrb(id);
 
+    // ── 涟漪在 orb 消失前发射，否则 opacity:0 后不可见 ──
     if (this.ripple) this.ripple.emitById(id, 'failure');
+    this.orbital.removeOrb(id);
 
     if (this.activeId === id) {
       if (this.order.length > 0) {
         this.switchTo(this.order[0]);
       } else {
         this.activeId = null;
-        // 最后一个终端关闭 → 空状态，用户通过侧栏或空球创建项目
       }
     }
     this._scheduleSave();

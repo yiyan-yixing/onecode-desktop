@@ -84,10 +84,7 @@ const CHECK_TIMEOUT_SECS: u64 = 5;
 /// 检测环境依赖（Claude Code CLI / Node.js / Git）
 #[tauri::command]
 pub fn check_environment() -> Result<CheckEnvironmentResult, String> {
-    let deps: Vec<DependencyStatus> = DEPS
-        .iter()
-        .map(check_one_dep)
-        .collect();
+    let deps: Vec<DependencyStatus> = DEPS.iter().map(check_one_dep).collect();
 
     let all_ok = deps.iter().all(|d| d.found && d.version_ok);
 
@@ -102,7 +99,7 @@ pub fn check_environment() -> Result<CheckEnvironmentResult, String> {
 pub fn is_first_run(cfg_mgr: State<'_, ConfigManager>) -> Result<bool, String> {
     let arc = cfg_mgr.arc();
     let cfg = arc.blocking_read();
-        Ok(!cfg.wizard_completed)
+    Ok(!cfg.wizard_completed)
 }
 
 /// 保存 Wizard 配置（API Key / Base URL / Model + 标记 wizard_completed）
@@ -269,14 +266,8 @@ fn regex_simple() {}
 
 /// 版本比较：v >= min_version（简单 major.minor.patch 数值比较）
 fn version_gte(v: &str, min: &str) -> bool {
-    let v_parts: Vec<u32> = v
-        .split('.')
-        .filter_map(|p| p.parse().ok())
-        .collect();
-    let m_parts: Vec<u32> = min
-        .split('.')
-        .filter_map(|p| p.parse().ok())
-        .collect();
+    let v_parts: Vec<u32> = v.split('.').filter_map(|p| p.parse().ok()).collect();
+    let m_parts: Vec<u32> = min.split('.').filter_map(|p| p.parse().ok()).collect();
 
     for i in 0..m_parts.len().max(v_parts.len()) {
         let v_n = v_parts.get(i).copied().unwrap_or(0);
@@ -310,7 +301,10 @@ mod tests {
     fn test_parse_version() {
         assert_eq!(parse_version("v22.5.1"), Some("22.5.1".to_string()));
         assert_eq!(parse_version("node v22.5.1"), Some("22.5.1".to_string()));
-        assert_eq!(parse_version("git version 2.40.0"), Some("2.40.0".to_string()));
+        assert_eq!(
+            parse_version("git version 2.40.0"),
+            Some("2.40.0".to_string())
+        );
         assert_eq!(parse_version("claude 1.0.5"), Some("1.0.5".to_string()));
     }
 

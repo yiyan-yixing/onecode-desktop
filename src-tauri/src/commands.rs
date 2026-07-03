@@ -50,9 +50,7 @@ pub async fn pty_spawn(
     let profile = crate::backend::resolve_or_default(effective_backend);
 
     let cmd = cmd.unwrap_or_else(|| profile.cmd.to_string());
-    let args = args.unwrap_or_else(|| {
-        profile.default_args.iter().map(|s| s.to_string()).collect()
-    });
+    let args = args.unwrap_or_else(|| profile.default_args.iter().map(|s| s.to_string()).collect());
     let cwd = {
         let c = cwd.unwrap_or_else(|| config.default_cwd.clone());
         // 确保默认工作目录存在
@@ -77,7 +75,18 @@ pub async fn pty_spawn(
     }
     log::info!("[pty_spawn] backend={effective_backend} cmd={cmd:?} args={args:?} cwd={cwd:?} project_id={project_id:?} cols={cols:?} rows={rows:?}");
     let (id, pid) = state
-        .spawn(cmd, args, cwd, env, data_channel, label, project_id, effective_backend.to_string(), cols, rows)
+        .spawn(
+            cmd,
+            args,
+            cwd,
+            env,
+            data_channel,
+            label,
+            project_id,
+            effective_backend.to_string(),
+            cols,
+            rows,
+        )
         .await
         .map_err(|e| {
             log::error!("[pty_spawn] FAILED: {e}");
@@ -293,12 +302,20 @@ pub async fn save_project(project: ProjectInfo) -> Result<String, String> {
         if let Ok(entries) = std::fs::read_dir(&projects_dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
-                if path.extension().map_or(true, |e| e != "json") { continue; }
+                if path.extension().map_or(true, |e| e != "json") {
+                    continue;
+                }
                 if let Ok(content) = std::fs::read_to_string(&path) {
                     if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
                         if val.get("name").and_then(|v| v.as_str()) == Some(&project.name) {
-                            existing_id = val.get("id").and_then(|v| v.as_str()).map(|s| s.to_string());
-                            existing_created = val.get("created_at").and_then(|v| v.as_str()).map(|s| s.to_string());
+                            existing_id = val
+                                .get("id")
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string());
+                            existing_created = val
+                                .get("created_at")
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string());
                             existing_path = Some(path);
                             break;
                         }
@@ -332,8 +349,7 @@ pub async fn save_project(project: ProjectInfo) -> Result<String, String> {
         "updated_at": now,
     });
     let path = projects_dir.join(format!("{}.json", id));
-    let content =
-        serde_json::to_string_pretty(&data).map_err(|e| format!("serialize: {e}"))?;
+    let content = serde_json::to_string_pretty(&data).map_err(|e| format!("serialize: {e}"))?;
     std::fs::write(&path, content).map_err(|e| format!("write {}: {e}", path.display()))?;
 
     // Migrate: remove old <name>.json if it exists (from v0 format)
@@ -389,13 +405,18 @@ pub async fn list_projects() -> Result<Vec<serde_json::Value>, String> {
     // Same-name or same-dir projects are considered duplicates (prevents
     // two project cards pointing to the same directory from showing).
     {
-        let mut seen_name: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-        let mut seen_dir: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        let mut seen_name: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
+        let mut seen_dir: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
         for (i, p) in projects.iter().enumerate() {
             let my_time = p.get("updated_at").and_then(|v| v.as_str()).unwrap_or("");
             if let Some(name) = p.get("name").and_then(|v| v.as_str()) {
                 if let Some(&prev_i) = seen_name.get(name) {
-                    let prev_time = projects[prev_i].get("updated_at").and_then(|v| v.as_str()).unwrap_or("");
+                    let prev_time = projects[prev_i]
+                        .get("updated_at")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
                     if my_time >= prev_time {
                         seen_name.insert(name.to_string(), i);
                     }
@@ -406,7 +427,10 @@ pub async fn list_projects() -> Result<Vec<serde_json::Value>, String> {
             if let Some(dir) = p.get("dir").and_then(|v| v.as_str()) {
                 if !dir.is_empty() {
                     if let Some(&prev_i) = seen_dir.get(dir) {
-                        let prev_time = projects[prev_i].get("updated_at").and_then(|v| v.as_str()).unwrap_or("");
+                        let prev_time = projects[prev_i]
+                            .get("updated_at")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
                         if my_time >= prev_time {
                             seen_dir.insert(dir.to_string(), i);
                         }
@@ -416,20 +440,35 @@ pub async fn list_projects() -> Result<Vec<serde_json::Value>, String> {
                 }
             }
         }
-        let keep: std::collections::HashSet<usize> = seen_name.values().copied().chain(seen_dir.values().copied()).collect();
+        let keep: std::collections::HashSet<usize> = seen_name
+            .values()
+            .copied()
+            .chain(seen_dir.values().copied())
+            .collect();
         // Remove orphaned JSON files for duplicate projects
-        let remove_indices: Vec<usize> = (0..projects.len()).filter(|i| !keep.contains(i)).collect();
+        let remove_indices: Vec<usize> =
+            (0..projects.len()).filter(|i| !keep.contains(i)).collect();
         for &i in &remove_indices {
             if let Some(val) = projects[i].get("id").and_then(|v| v.as_str()) {
                 let orphan = projects_dir.join(format!("{}.json", val));
                 let _ = std::fs::remove_file(&orphan);
-                log::info!("[project] removed duplicate: {} ({})",
-                    projects[i].get("name").and_then(|v| v.as_str()).unwrap_or("?"), val);
+                log::info!(
+                    "[project] removed duplicate: {} ({})",
+                    projects[i]
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("?"),
+                    val
+                );
             }
         }
         if !remove_indices.is_empty() {
             let mut i = 0usize;
-            projects.retain(|_| { let keep = remove_indices.binary_search(&i).is_err(); i += 1; keep });
+            projects.retain(|_| {
+                let keep = remove_indices.binary_search(&i).is_err();
+                i += 1;
+                keep
+            });
         }
     }
     // Sort by created_at descending
@@ -492,4 +531,10 @@ pub async fn get_home_dir() -> Result<String, String> {
         .or_else(|_| std::env::var("USERPROFILE"))
         .unwrap_or_else(|_| ".".to_string());
     Ok(home)
+}
+
+/// 前端调试日志：JS → Rust → 终端 stdout
+#[tauri::command]
+pub fn debug_log(tag: String, msg: String) {
+    log::info!("[js:{tag}] {msg}");
 }

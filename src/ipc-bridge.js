@@ -4,6 +4,53 @@
 const { invoke, Channel } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 
+/** 前端调试日志 → Rust → 终端 stdout（无需 DevTools） */
+const _debugLogBuffer = [];
+export function debugLog(tag, msg) {
+  const ts = new Date().toISOString().substring(11, 19);
+  const line = `${ts} [${tag}] ${msg}`;
+  _debugLogBuffer.push(line);
+  if (_debugLogBuffer.length > 200) _debugLogBuffer.shift();
+  invoke('debug_log', { tag, msg }).catch(() => {}); // fire-and-forget
+}
+/** 读取缓存的调试日志 */
+export function getDebugLogBuffer() {
+  return _debugLogBuffer.join('\n');
+}
+/** 诊断：将侧边栏完整 DOM 结构写到 Rust 日志 */
+export function dumpSidebarToRust(label) {
+  const el = document.getElementById('orbital');
+  if (!el) return;
+  const lines = [`=== ${label} ===`];
+  const walk = (node, depth) => {
+    const indent = '  '.repeat(depth);
+    const tag = node.tagName?.toLowerCase() || '?';
+    const cls = (node.className?.toString() || '').substring(0, 60);
+    const id = node.id || '';
+    const dataId = node.dataset?.id ? node.dataset.id.substring(0, 8) : '';
+    const dataPid = node.dataset?.projectId ? node.dataset.projectId.substring(0, 8) : '';
+    const cs = window.getComputedStyle(node);
+    const borders = [];
+    if (cs.borderLeftWidth !== '0px') borders.push(`L=${cs.borderLeftWidth}(${cs.borderLeftColor})`);
+    if (cs.borderRightWidth !== '0px') borders.push(`R=${cs.borderRightWidth}`);
+    if (cs.borderTopWidth !== '0px') borders.push(`T=${cs.borderTopWidth}(${cs.borderTopColor})`);
+    if (cs.borderBottomWidth !== '0px') borders.push(`B=${cs.borderBottomWidth}(${cs.borderBottomColor})`);
+    const borderStr = borders.length ? ` BORDER:${borders.join(' ')}` : '';
+    let info = `${indent}${tag}`;
+    if (id) info += `#${id}`;
+    if (cls) info += `.${cls.split(' ').join('.')}`;
+    if (dataId) info += `[${dataId}]`;
+    if (dataPid) info += `@${dataPid}`;
+    info += `${borderStr} h=${cs.height}`;
+    if (node.children.length === 0 && node.textContent?.trim()) info += ` "${node.textContent.trim().substring(0, 30)}"`;
+    lines.push(info);
+    for (const child of node.children) walk(child, depth + 1);
+  };
+  walk(el, 0);
+  // 一次性发送完整 dump
+  invoke('debug_log', { tag: 'sidebar-dump', msg: lines.join('\n') }).catch(() => {});
+}
+
 // 缓存 TextEncoder 实例，避免每次 ptyWrite 调用都 new
 const _textEncoder = new TextEncoder();
 

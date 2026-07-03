@@ -24,11 +24,11 @@ pub struct CcSession {
     pub title: String,
     pub project_dir: String,
     pub project_name: String,
-    pub status: String,        // "idle" | "busy" | "ended"
+    pub status: String, // "idle" | "busy" | "ended"
     pub first_message: String,
     pub tool_count: u32,
-    pub started_at: i64,       // epoch ms
-    pub updated_at: i64,       // epoch ms
+    pub started_at: i64, // epoch ms
+    pub updated_at: i64, // epoch ms
     pub is_active: bool,
     pub pid: Option<u32>,
 }
@@ -71,7 +71,10 @@ impl CcSessionsCache {
             *guard = Some((now, sessions.clone()));
         }
         if let Some(pd) = project_dir {
-            return sessions.into_iter().filter(|s| s.project_dir == pd).collect();
+            return sessions
+                .into_iter()
+                .filter(|s| s.project_dir == pd)
+                .collect();
         }
         sessions
     }
@@ -121,7 +124,9 @@ fn compute_sessions(global_dir: &Path) -> Vec<CcSession> {
             // Try to read title from transcript as fallback (session may have just started)
             let title = info.name.clone().unwrap_or_else(|| {
                 let encoded_cwd = info.cwd.replace('/', "-");
-                let project_dir = global_dir.join("projects").join(format!("-{}", encoded_cwd));
+                let project_dir = global_dir
+                    .join("projects")
+                    .join(format!("-{}", encoded_cwd));
                 let transcript_path = project_dir.join(format!("{}.jsonl", sid));
                 if let Ok(content) = std::fs::read_to_string(&transcript_path) {
                     let mut found_title = String::new();
@@ -292,11 +297,7 @@ fn scan_project_transcripts(
         .and_then(|s| s.to_str())
         .unwrap_or("");
     let decoded_cwd = decode_project_dir(project_dir_name);
-    let cwd_basename = decoded_cwd
-        .split('/')
-        .next_back()
-        .unwrap_or("")
-        .to_string();
+    let cwd_basename = decoded_cwd.split('/').next_back().unwrap_or("").to_string();
 
     if let Ok(entries) = std::fs::read_dir(project_path) {
         for entry in entries.flatten() {
@@ -325,9 +326,7 @@ fn scan_project_transcripts(
             let started_at = stats
                 .map(|s| s.started_at)
                 .unwrap_or_else(|| last_timestamp);
-            let updated_at = stats
-                .map(|s| s.updated_at)
-                .unwrap_or(last_timestamp);
+            let updated_at = stats.map(|s| s.updated_at).unwrap_or(last_timestamp);
 
             // Check if active
             let active_info = active_map.get(&session_id);

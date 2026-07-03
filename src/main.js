@@ -295,7 +295,7 @@ function initKeybindings(tm) {
     }
     if (key === 'w') {
       e.preventDefault();
-      if (tm.activeId) tm.closeTab(tm.activeId);
+      if (tm.activeId) tm.closeTab(tm.activeId); // _closing 标记防止快速连按双重 close
       return;
     }
     const n = parseInt(e.key, 10);

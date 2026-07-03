@@ -30,8 +30,8 @@ pub struct ListDirResult {
 pub struct FileContent {
     pub name: String,
     pub path: String,
-    pub file_type: String,       // "md" | "code" | "img" | "pdf" | "bin"
-    pub text: Option<String>,     // 文本文件内容
+    pub file_type: String,           // "md" | "code" | "img" | "pdf" | "bin"
+    pub text: Option<String>,        // 文本文件内容
     pub data_base64: Option<String>, // 二进制文件 base64（图片/PDF）
     pub size: u64,
 }
@@ -46,8 +46,7 @@ const MD_EXTS: &[&str] = &["md", "mdx", "markdown"];
 
 /// 图片扩展名
 const IMG_EXTS: &[&str] = &[
-    "png", "jpg", "jpeg", "gif", "svg", "webp", "ico", "bmp", "tiff", "tif",
-    "avif",
+    "png", "jpg", "jpeg", "gif", "svg", "webp", "ico", "bmp", "tiff", "tif", "avif",
 ];
 
 /// PDF 扩展名
@@ -55,59 +54,115 @@ const PDF_EXTS: &[&str] = &["pdf"];
 
 /// 代码文件扩展名
 const CODE_EXTS: &[&str] = &[
-    "js", "jsx", "mjs", "cjs",
-    "ts", "tsx", "mts", "cts",
-    "py", "pyw", "pyi",
-    "rs", "rlib",
+    "js",
+    "jsx",
+    "mjs",
+    "cjs",
+    "ts",
+    "tsx",
+    "mts",
+    "cts",
+    "py",
+    "pyw",
+    "pyi",
+    "rs",
+    "rlib",
     "go",
-    "java", "kt", "kts",
-    "c", "h", "cpp", "hpp", "cc", "cxx", "hxx",
+    "java",
+    "kt",
+    "kts",
+    "c",
+    "h",
+    "cpp",
+    "hpp",
+    "cc",
+    "cxx",
+    "hxx",
     "cs",
     "rb",
     "php",
     "swift",
     "zig",
     "lua",
-    "r", "R",
-    "scala", "sc",
-    "sh", "bash", "zsh", "fish",
-    "ps1", "psm1",
+    "r",
+    "R",
+    "scala",
+    "sc",
+    "sh",
+    "bash",
+    "zsh",
+    "fish",
+    "ps1",
+    "psm1",
     "sql",
-    "html", "htm",
-    "css", "scss", "sass", "less",
-    "vue", "svelte",
-    "yaml", "yml", "toml", "ini", "cfg", "conf",
-    "json", "jsonc",
-    "xml", "xsl", "xsd",
-    "proto", "graphql", "gql",
+    "html",
+    "htm",
+    "css",
+    "scss",
+    "sass",
+    "less",
+    "vue",
+    "svelte",
+    "yaml",
+    "yml",
+    "toml",
+    "ini",
+    "cfg",
+    "conf",
+    "json",
+    "jsonc",
+    "xml",
+    "xsl",
+    "xsd",
+    "proto",
+    "graphql",
+    "gql",
     "dockerfile",
     "makefile",
     "cmake",
     "gradle",
     "lock",
     "log",
-    "diff", "patch",
+    "diff",
+    "patch",
 ];
 
 /// 代码文件名（无扩展名匹配）
 const CODE_NAMES: &[&str] = &[
-    "Makefile", "Dockerfile", "Vagrantfile", "Gemfile", "Rakefile",
-    "CMakeLists.txt", "Cargo.toml", "Cargo.lock", "go.mod", "go.sum",
-    "package.json", "tsconfig.json", ".gitignore", ".gitattributes",
-    ".env", ".env.local", ".env.production",
-    "LICENSE", "COPYING", "AUTHORS",
-    "Gemfile.lock", "Podfile", "Brewfile",
+    "Makefile",
+    "Dockerfile",
+    "Vagrantfile",
+    "Gemfile",
+    "Rakefile",
+    "CMakeLists.txt",
+    "Cargo.toml",
+    "Cargo.lock",
+    "go.mod",
+    "go.sum",
+    "package.json",
+    "tsconfig.json",
+    ".gitignore",
+    ".gitattributes",
+    ".env",
+    ".env.local",
+    ".env.production",
+    "LICENSE",
+    "COPYING",
+    "AUTHORS",
+    "Gemfile.lock",
+    "Podfile",
+    "Brewfile",
 ];
 
 /// P1-17: 敏感目录名（相对于 $HOME），禁止读取以防止密钥/凭证泄露。
 const SENSITIVE_DIR_NAMES: &[&str] = &[
-    ".ssh",       // SSH 私钥、authorized_keys、known_hosts
-    ".gnupg",     // GPG 私钥环
-    ".kube",      // Kubernetes 凭证/配置
-    ".aws",       // AWS 凭证 (~/.aws/credentials)
-    ".config/gcloud", // GCP 凭证
-    ".azure",     // Azure 凭证
-    ".pki",       // NSS/PKI 数据库（Firefox 等用）
+    ".ssh",             // SSH 私钥、authorized_keys、known_hosts
+    ".gnupg",           // GPG 私钥环
+    ".kube",            // Kubernetes 凭证/配置
+    ".aws",             // AWS 凭证 (~/.aws/credentials)
+    ".config/gcloud",   // GCP 凭证
+    ".azure",           // Azure 凭证
+    ".pki",             // NSS/PKI 数据库（Firefox 等用）
     "Application Data", // Windows 敏感数据（非当前平台但防御性保留）
 ];
 
@@ -117,13 +172,23 @@ fn classify_file(name: &str) -> &'static str {
     let lower = name.to_lowercase();
     // 先检查扩展名
     if let Some(ext) = lower.rsplit('.').next() {
-        if MD_EXTS.contains(&ext) { return "md"; }
-        if IMG_EXTS.contains(&ext) { return "img"; }
-        if PDF_EXTS.contains(&ext) { return "pdf"; }
-        if CODE_EXTS.contains(&ext) { return "code"; }
+        if MD_EXTS.contains(&ext) {
+            return "md";
+        }
+        if IMG_EXTS.contains(&ext) {
+            return "img";
+        }
+        if PDF_EXTS.contains(&ext) {
+            return "pdf";
+        }
+        if CODE_EXTS.contains(&ext) {
+            return "code";
+        }
     }
     // 再检查完整文件名
-    if CODE_NAMES.contains(&name) { return "code"; }
+    if CODE_NAMES.contains(&name) {
+        return "code";
+    }
     "bin"
 }
 
@@ -139,8 +204,7 @@ fn home_dir() -> Option<PathBuf> {
 
 /// 验证路径在安全作用域内（$HOME 子目录），并拒绝敏感目录。
 fn validate_path(path: &str) -> Result<PathBuf, String> {
-    let canonical = fs::canonicalize(path)
-        .map_err(|e| format!("invalid path: {e}"))?;
+    let canonical = fs::canonicalize(path).map_err(|e| format!("invalid path: {e}"))?;
 
     if let Some(home) = home_dir() {
         if canonical.starts_with(&home) {
@@ -156,14 +220,20 @@ fn validate_path(path: &str) -> Result<PathBuf, String> {
     // 拒绝系统路径（macOS: /etc → /private/etc, /var → /private/var, /tmp → /private/tmp）
     let path_str = canonical.to_string_lossy();
     let denied_prefixes = [
-        "/etc", "/private/etc",
-        "/var", "/private/var",
+        "/etc",
+        "/private/etc",
+        "/var",
+        "/private/var",
         "/usr",
-        "/sbin", "/bin",
-        "/lib", "/private/lib",
+        "/sbin",
+        "/bin",
+        "/lib",
+        "/private/lib",
         "/dev",
-        "/proc", "/sys",
-        "/System", "/Library",
+        "/proc",
+        "/sys",
+        "/System",
+        "/Library",
     ];
     for prefix in &denied_prefixes {
         if path_str.starts_with(prefix) {
@@ -252,7 +322,9 @@ pub async fn fs_list_dir(path: String) -> Result<ListDirResult, String> {
                 classify_file(&name).to_string()
             };
             let modified_ms = modified.and_then(|t| {
-                t.duration_since(UNIX_EPOCH).ok().map(|d| d.as_millis() as i64)
+                t.duration_since(UNIX_EPOCH)
+                    .ok()
+                    .map(|d| d.as_millis() as i64)
             });
             let full_path = e.path().to_string_lossy().to_string();
             Some(DirEntry {
@@ -268,12 +340,10 @@ pub async fn fs_list_dir(path: String) -> Result<ListDirResult, String> {
 
     // 排序：目录优先，然后按名称字母序（忽略大小写）
     let mut sorted = entries;
-    sorted.sort_by(|a, b| {
-        match (a.is_dir, b.is_dir) {
-            (true, false) => std::cmp::Ordering::Less,
-            (false, true) => std::cmp::Ordering::Greater,
-            _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
-        }
+    sorted.sort_by(|a, b| match (a.is_dir, b.is_dir) {
+        (true, false) => std::cmp::Ordering::Less,
+        (false, true) => std::cmp::Ordering::Greater,
+        _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
     });
 
     Ok(ListDirResult {
@@ -295,8 +365,7 @@ pub async fn fs_read_file(path: String) -> Result<FileContent, String> {
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_default();
 
-    let meta = fs::metadata(&canonical)
-        .map_err(|e| format!("metadata failed: {e}"))?;
+    let meta = fs::metadata(&canonical).map_err(|e| format!("metadata failed: {e}"))?;
     let size = meta.len();
     let file_type = classify_file(&name).to_string();
 
@@ -316,8 +385,8 @@ pub async fn fs_read_file(path: String) -> Result<FileContent, String> {
                     size,
                 })
             } else {
-                let text = fs::read_to_string(&canonical)
-                    .map_err(|e| format!("read failed: {e}"))?;
+                let text =
+                    fs::read_to_string(&canonical).map_err(|e| format!("read failed: {e}"))?;
                 Ok(FileContent {
                     name,
                     path: canonical.to_string_lossy().to_string(),
@@ -340,8 +409,7 @@ pub async fn fs_read_file(path: String) -> Result<FileContent, String> {
                     size,
                 })
             } else {
-                let data = fs::read(&canonical)
-                    .map_err(|e| format!("read failed: {e}"))?;
+                let data = fs::read(&canonical).map_err(|e| format!("read failed: {e}"))?;
                 use base64::Engine;
                 let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
                 Ok(FileContent {

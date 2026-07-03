@@ -118,6 +118,7 @@ pub fn run() {
             wizard::is_first_run,
             wizard::save_wizard_config,
             backend::list_backends,
+            commands::debug_log,
         ])
         .run(tauri::generate_context!())
         .expect("failed to run OneCode Desktop");
