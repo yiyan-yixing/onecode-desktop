@@ -1550,10 +1550,6 @@ body::before {
 
 /* ── Right Sidebar mirror: File Explorer ── */
 
-.sidebar-right .fe-toolbar {
-  flex-direction: row-reverse;
-}
-
 .sidebar-right .fe-item {
   flex-direction: row-reverse;
 }
