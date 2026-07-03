@@ -144,15 +144,18 @@ async function init() {
     }
   });
 
-  // File panel toggle button in titlebar
+  // Right panel toggle button in titlebar
   const filePanel = document.getElementById('filePanel');
   fileExplorer.init(filePanel, tabManager);
-  document.getElementById('filePanelToggle')?.addEventListener('click', () => {
+  const rpToggle = document.getElementById('rightPanelToggle');
+  rpToggle?.addEventListener('click', () => {
     const panel = document.getElementById('filePanel');
     if (panel) {
       panel.classList.toggle('collapsed');
-      fileExplorer.setVisible(!panel.classList.contains('collapsed'));
-      if (!panel.classList.contains('collapsed')) {
+      const isOpen = !panel.classList.contains('collapsed');
+      fileExplorer.setVisible(isOpen);
+      rpToggle?.classList.toggle('on', isOpen);
+      if (isOpen) {
         fileExplorer.syncCwd(tabManager.getActiveCwd());
       }
     }

@@ -180,6 +180,14 @@ body::before {
   fill: none;
 }
 
+#rightPanelToggle.on .sb-right {
+  fill: var(--tx-warm2);
+}
+
+#rightPanelToggle:not(.on) .sb-right {
+  fill: none;
+}
+
 /* ══════════ Main Content — Terminal + Sidebar ══════════ */
 
 .content {
