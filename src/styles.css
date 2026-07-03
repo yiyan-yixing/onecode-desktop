@@ -1564,19 +1564,23 @@ body::before {
 .fe-preview-header {
   display: flex;
   align-items: center;
-  padding: 8px 10px;
-  gap: 8px;
+  position: relative;
+  height: 34px;
+  padding: 0 10px;
   border-bottom: 1px solid var(--sand);
 }
 
 .fe-preview-title {
-  flex: 1;
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
   font-size: 12px;
   font-weight: 600;
   color: var(--tx-warm2);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  max-width: 70%;
   font-family: var(--font-mono);
 }
 
@@ -1586,6 +1590,7 @@ body::before {
   justify-content: center;
   width: 24px;
   height: 24px;
+  margin-left: auto;
   border: none;
   background: none;
   color: var(--tx-warm4);
@@ -1604,46 +1609,125 @@ body::before {
   flex: 1;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 12px;
+  padding: 16px 20% 24px;
 }
 
 /* Markdown 预览 */
 .fe-md {
   font-size: 12px;
-  line-height: 1.6;
+  line-height: 1.7;
   color: var(--tx-warm2);
   word-wrap: break-word;
+  overflow-wrap: break-word;
 }
 
-.fe-md h1, .fe-md h2, .fe-md h3 {
-  margin: 12px 0 6px;
+/* ── Headings ── */
+
+.fe-md h1, .fe-md h2, .fe-md h3,
+.fe-md h4, .fe-md h5, .fe-md h6 {
+  margin: 16px 0 8px;
   color: var(--tx-warm);
   font-weight: 700;
+  line-height: 1.3;
 }
 
-.fe-md h1 { font-size: 16px; }
-.fe-md h2 { font-size: 14px; }
+.fe-md h1 { font-size: 18px; border-bottom: 1px solid var(--sand); padding-bottom: 4px; }
+.fe-md h2 { font-size: 15px; border-bottom: 1px solid var(--sand); padding-bottom: 3px; }
 .fe-md h3 { font-size: 13px; }
+.fe-md h4 { font-size: 12px; }
+.fe-md h5 { font-size: 12px; color: var(--tx-warm3); }
+.fe-md h6 { font-size: 11px; color: var(--tx-warm4); text-transform: uppercase; letter-spacing: 0.5px; }
+
+.fe-md h1:first-child, .fe-md h2:first-child, .fe-md h3:first-child {
+  margin-top: 0;
+}
+
+/* ── Paragraphs ── */
 
 .fe-md p {
-  margin: 4px 0;
+  margin: 6px 0;
 }
+
+/* ── Links ── */
 
 .fe-md a {
   color: var(--em);
   text-decoration: none;
+  border-bottom: 1px solid transparent;
+  transition: border-color var(--dur-fast);
 }
 
 .fe-md a:hover {
-  text-decoration: underline;
+  border-bottom-color: var(--em);
 }
+
+/* ── Lists ── */
+
+.fe-md ul, .fe-md ol {
+  margin: 6px 0;
+  padding-left: 20px;
+}
+
+.fe-md li {
+  margin: 2px 0;
+}
+
+.fe-md li > ul, .fe-md li > ol {
+  margin: 2px 0;
+}
+
+.fe-md ul {
+  list-style-type: disc;
+}
+
+.fe-md ol {
+  list-style-type: decimal;
+}
+
+/* Task list checkboxes (GFM) */
+.fe-md li input[type="checkbox"] {
+  margin-right: 4px;
+  vertical-align: middle;
+  accent-color: var(--em);
+}
+
+/* ── Blockquotes ── */
+
+.fe-md blockquote {
+  margin: 8px 0;
+  padding: 6px 12px;
+  border-left: 3px solid var(--em);
+  background: var(--em-ghost);
+  border-radius: 0 var(--r-xs) var(--r-xs) 0;
+  color: var(--tx-warm3);
+}
+
+.fe-md blockquote p {
+  margin: 2px 0;
+}
+
+/* ── Code ── */
 
 .fe-md pre {
   background: var(--void);
   border-radius: var(--r-sm);
-  padding: 10px;
+  padding: 10px 12px;
   overflow-x: auto;
   margin: 8px 0;
+  border: 1px solid var(--surface);
+}
+
+.fe-md pre code {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre;
+}
+
+.fe-md pre code.hljs {
+  background: transparent;
+  padding: 0;
 }
 
 .fe-md code {
@@ -1653,9 +1737,79 @@ body::before {
 
 .fe-md :not(pre) > code {
   background: var(--linen);
-  padding: 1px 4px;
+  padding: 1px 5px;
   border-radius: 3px;
   font-size: 11px;
+  color: var(--peach);
+}
+
+/* ── Tables (GFM) ── */
+
+.fe-md table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 8px 0;
+  font-size: 11px;
+}
+
+.fe-md th, .fe-md td {
+  padding: 4px 8px;
+  border: 1px solid var(--sand);
+  text-align: left;
+}
+
+.fe-md th {
+  background: var(--linen);
+  font-weight: 600;
+  color: var(--tx-warm);
+}
+
+.fe-md tr:nth-child(even) {
+  background: var(--em-ghost);
+}
+
+/* ── Horizontal Rule ── */
+
+.fe-md hr {
+  border: none;
+  border-top: 1px solid var(--sand);
+  margin: 12px 0;
+}
+
+/* ── Emphasis ── */
+
+.fe-md strong {
+  font-weight: 700;
+  color: var(--tx-warm);
+}
+
+.fe-md em {
+  font-style: italic;
+}
+
+.fe-md del {
+  text-decoration: line-through;
+  color: var(--tx-warm4);
+}
+
+/* ── Images ── */
+
+.fe-md img {
+  max-width: 100%;
+  border-radius: var(--r-sm);
+  margin: 4px 0;
+}
+
+/* ── Definition lists ── */
+
+.fe-md dt {
+  font-weight: 600;
+  margin-top: 6px;
+}
+
+.fe-md dd {
+  margin-left: 16px;
+  color: var(--tx-warm3);
 }
 
 /* 代码预览 */

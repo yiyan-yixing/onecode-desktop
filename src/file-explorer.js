@@ -125,6 +125,33 @@ function hlCode(text, lang) {
   return esc(text);
 }
 
+/** 配置 marked 渲染器（GFM + hljs 代码高亮 + 换行转 <br>）
+ *  在首次 Markdown 预览时调用一次，后续直接使用。
+ *  highlight 选项在解析阶段完成代码高亮，避免渲染后再遍历 DOM。 */
+let _markedConfigured = false;
+function configureMarked() {
+  if (_markedConfigured || typeof window.marked === 'undefined') return;
+  try {
+    window.marked.use({
+      breaks: true,
+      gfm: true,
+      highlight: function(code, lang) {
+        if (typeof window.hljs !== 'undefined') {
+          try {
+            if (lang && window.hljs.getLanguage(lang))
+              return window.hljs.highlight(code, { language: lang }).value;
+            return window.hljs.highlightAuto(code).value;
+          } catch (_) {}
+        }
+        return esc(code);
+      },
+    });
+    _markedConfigured = true;
+  } catch (e) {
+    console.warn('[file-explorer] marked.use failed:', e);
+  }
+}
+
 // ── 控制器 ──────────────────────────────────────────────────────
 
 export class FileExplorerController {
@@ -381,16 +408,11 @@ export class FileExplorerController {
     switch (content.file_type) {
       case 'md': {
         if (content.text) {
+          configureMarked();
           if (typeof window.marked !== 'undefined') {
             try {
               const html = sanitizeHtml(window.marked.parse(content.text));
               body.innerHTML = `<div class="fe-md">${html}</div>`;
-              // 高亮 markdown 内的代码块
-              body.querySelectorAll('pre code').forEach((block) => {
-                if (typeof window.hljs !== 'undefined') {
-                  window.hljs.highlightElement(block);
-                }
-              });
               break;
             } catch (_) {}
           }
