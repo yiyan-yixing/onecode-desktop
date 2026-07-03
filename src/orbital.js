@@ -207,17 +207,19 @@ export class OrbitalController {
       const initial = (proj.name || '?')[0].toUpperCase();
 
       const projBackend = proj.backend || null;
-      const projBackendDisplay = projBackend ? (this._backends.find(b => b.id === projBackend)?.display_name || projBackend) : null;
+      const projBackendShort = projBackend ? ({ 'claude-code': 'CC', 'opencode': 'OC', 'codex': 'CX', 'crush': 'CR', 'aider': 'AI', 'goose': 'GS', 'hermes': 'HM' }[projBackend] || projBackend) : null;
 
       card.innerHTML =
-        `<div class="project-icon" style="background:${identity.hex}22;color:${identity.hex}">${esc(initial)}</div>` +
+        `<div class="project-icon" data-backend="${esc(projBackend || '')}" style="background:${identity.hex}22;color:${identity.hex};${projBackend ? `--backend-indicator:${identity.hex}` : ''}">${esc(initial)}</div>` +
         `<div class="project-info">` +
-        `<div class="project-name">${esc(proj.name)}${projBackendDisplay ? `<span class="project-backend-badge">${esc(projBackendDisplay)}</span>` : ''}</div>` +
-        (proj.dir ? `<div class="project-dir">${esc(proj.dir.split('/').pop())}</div>` : '') +
-        (proj.description ? `<div class="project-desc">${esc(proj.description)}</div>` : '') +
+        `<div class="project-name-row">` +
+        `<div class="project-name">${esc(proj.name)}</div>` +
+        (projBackendShort ? `<span class="project-backend-badge">${esc(projBackendShort)}</span>` : '') +
         `</div>` +
-        (runningCount > 0 ? `<span class="project-count has">${runningCount} 活跃</span>` : '') +
-        (exitedCount > 0 ? `<span class="project-count exited">${exitedCount} 异常</span>` : '') +
+        (proj.dir ? `<div class="project-dir">${esc(proj.dir.split('/').pop())}</div>` : '') +
+        `</div>` +
+        (runningCount > 1 ? `<span class="project-count has">${runningCount}</span>` : '') +
+        (exitedCount > 1 ? `<span class="project-count exited">${exitedCount}</span>` : '') +
         `<button class="project-more" title="更多">⋯</button>`;
 
       // Click → switch to existing terminal, or create one for this project

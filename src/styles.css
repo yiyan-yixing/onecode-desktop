@@ -395,38 +395,66 @@ body::before {
 .project-card {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 7px 8px;
-  margin: 2px 4px;
+  gap: 8px;
+  padding: 6px 10px;
+  margin: 1px 4px;
   border-radius: 6px;
   cursor: pointer;
-  transition: background var(--dur-fast) var(--ease-out);
-  flex-wrap: wrap; /* orb 作为子元素时可换行 */
+  transition: background var(--dur-fast) var(--ease-out),
+              box-shadow var(--dur-fast) var(--ease-out);
+  flex-wrap: nowrap;
+  position: relative;
+  border-left: 2px solid transparent;
 }
 
 .project-card:hover {
   background: var(--sand);
+  box-shadow: 0 1px 2px rgba(0,0,0,.04);
+}
+
+.project-card:active {
+  background: var(--stone);
 }
 
 .project-card.active {
-  background: var(--sand);
-  border-left: 2px solid var(--tx-warm4);
-  padding-left: 6px;
+  background: var(--em-soft);
+  border-left-color: var(--em);
 }
 
 .project-card.active .project-name {
   color: var(--tx-warm);
 }
 
-/* 项目卡片内的 orb — 缩进对齐，独占一行 */
+.project-card.active .project-icon {
+  box-shadow: 0 0 0 2px var(--em-ghost, rgba(5,150,105,.12));
+}
+
+/* Orb inside project card: dot-only, no label */
 .project-card .orb {
-  padding: 2px 6px;
-  margin: 0 10px;
-  flex-basis: calc(100% - 10px);
+  padding: 0;
+  margin: 0;
+  flex-shrink: 0;
+  gap: 2px;
+  background: none !important;
+  box-shadow: none !important;
+}
+
+.project-card .orb:hover {
+  background: none !important;
+}
+
+.project-card .orb .orb-label {
+  display: none;
 }
 
 .project-card .orb .orb-cwd {
-  font-size: 10px;
+  display: none;
+}
+
+.project-card .orb .orb-dot {
+  width: 8px;
+  height: 8px;
+  cursor: pointer;
 }
 
 /* 关闭动画中的 orb 直接隐藏，不留残余空间 */
@@ -444,16 +472,41 @@ body::before {
   font-size: 11px;
   font-weight: 700;
   flex-shrink: 0;
-  transition: transform .12s;
+  position: relative;
+  transition: transform .12s, box-shadow var(--dur-fast) var(--ease-out);
 }
 
 .project-card:hover .project-icon {
   transform: scale(1.08);
 }
 
+/* Backend indicator: colored bottom edge on icon */
+.project-icon[data-backend]::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 4px;
+  right: 4px;
+  height: 2px;
+  border-radius: 1px 1px 0 0;
+  background: var(--backend-indicator, var(--lavender));
+}
+
 .project-info {
   flex: 1;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  overflow: hidden;
+}
+
+.project-name-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .project-name {
@@ -463,11 +516,14 @@ body::before {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  flex-shrink: 1;
+  min-width: 50px;
 }
 
-/* Backend badge on project card — small inline tag */
+/* Backend badge: always visible inline */
 .project-backend-badge {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
   font-size: 9px;
   font-weight: 600;
   font-family: var(--font-mono);
@@ -476,14 +532,14 @@ body::before {
   border: 1px solid rgba(167,139,250,.18);
   border-radius: 3px;
   padding: 0 3px;
-  margin-left: 3px;
-  vertical-align: middle;
   line-height: 13px;
   letter-spacing: 0.3px;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .project-dir {
-  font-size: 10px;
+  font-size: 9px;
   color: var(--tx-warm4);
   font-family: var(--font-mono);
   white-space: nowrap;
@@ -492,30 +548,35 @@ body::before {
 }
 
 .project-desc {
-  font-size: 10px;
-  color: var(--tx-warm4);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  margin-top: 1px;
+  display: none;
 }
 
+/* Count badge: number-only */
 .project-count {
-  font-size: 8px;
+  font-size: 9px;
   font-weight: 700;
   color: var(--tx-warm4);
-  padding: 1px 4px;
-  border-radius: 4px;
+  padding: 0 4px;
+  border-radius: 3px;
   background: var(--cream);
   border: 1px solid var(--sand);
   flex-shrink: 0;
   font-family: var(--font-mono);
+  line-height: 14px;
+  min-width: 14px;
+  text-align: center;
 }
 
 .project-count.has {
   color: var(--em);
   background: var(--em-soft);
   border-color: rgba(5,150,105,.15);
+}
+
+.project-count.exited {
+  color: #ef4444;
+  background: rgba(239,68,68,.08);
+  border-color: rgba(239,68,68,.15);
 }
 
 .project-more {
@@ -538,7 +599,7 @@ body::before {
 
 .project-more:hover {
   background: var(--sand);
-  color: var(--tx);
+  color: var(--tx-warm);
 }
 
 .project-empty {
