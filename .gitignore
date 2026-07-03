@@ -39,3 +39,4 @@ npm-debug.log*
 # Local settings
 .claude/settings.local.json
 verify-rust/target/
+.claude/

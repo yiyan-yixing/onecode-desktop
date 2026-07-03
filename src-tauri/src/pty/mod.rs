@@ -581,7 +581,7 @@ fn start_reader_batcher(
 
         // 交互式微批定时器：收到交互式数据后启动，2ms 后 flush
         // 初始设为极大值（永不到期），进入微批模式时重设为 2ms
-        let mut interactive_delay = tokio::time::sleep(Duration::from_secs(86400));
+        let interactive_delay = tokio::time::sleep(Duration::from_secs(86400));
         let mut interactive_pending = false;
         // pin 交互式延迟 future（tokio::select! 需要 pinned future）
         tokio::pin!(interactive_delay);
