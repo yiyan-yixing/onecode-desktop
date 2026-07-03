@@ -68,6 +68,8 @@ fn on_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
         "tray:quit" => {
             // 通知前端保存会话（尽力而为，前端已按变更实时保存，此处兜底）
             let _ = app.emit("app:before-quit", ());
+            // 释放阻止休眠的 assertion
+            crate::keep_awake::allow_idle_sleep();
             // kill 所有 PTY（同步，防止残留；PTY 关闭也会 SIGHUP 子进程组）
             if let Some(mgr) = app.try_state::<MultiPtyManager>() {
                 mgr.kill_all_blocking();

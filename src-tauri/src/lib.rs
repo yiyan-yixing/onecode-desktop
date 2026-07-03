@@ -9,6 +9,7 @@ mod commands;
 mod config;
 mod events;
 mod fs_explorer;
+mod keep_awake;
 mod pty;
 mod session;
 mod tray;
@@ -83,6 +84,9 @@ pub fn run() {
             if let Err(e) = tray::setup(app) {
                 log::warn!("[tray] setup failed (P1, non-fatal): {e}");
             }
+
+            // 阻止系统空闲休眠（允许屏幕熄灭，合盖仍休眠）
+            keep_awake::prevent_idle_sleep();
 
             // 健康检测后台循环
             pty::health::start_loop(app.handle().clone());
