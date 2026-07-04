@@ -131,11 +131,15 @@ fn load_cc_status(global_dir: &Path, project_dir: Option<&Path>) -> CcStatus {
     let mut out = CcStatus::default();
 
     // 两层 scope，顺序与 JS 一致：project 先、global 后
-    let scopes: Vec<(&Path, &str)> = match project_dir {
-        Some(p) => vec![(global_dir, "global"), (p, "project")],
-        None => vec![(global_dir, "global")],
+    // 项目 scope 的 base 是 {project_dir}/.claude（与 global scope 的 $HOME/.claude 对齐）
+    let scopes: Vec<(PathBuf, &str)> = match project_dir {
+        Some(p) => {
+            let p_claude = p.join(".claude");
+            vec![(global_dir.to_path_buf(), "global"), (p_claude, "project")]
+        }
+        None => vec![(global_dir.to_path_buf(), "global")],
     };
-    for (dir, scope) in scopes {
+    for (dir, scope) in &scopes {
         load_skills(dir, scope, &mut out.skills);
         load_hooks(dir, scope, &mut out.hooks);
         load_plugins(dir, scope, &mut out.plugins);
@@ -346,6 +350,7 @@ fn load_agents(dir: &Path, scope: &str, out: &mut Vec<AgentInfo>) {
         Ok(e) => e,
         Err(_) => return,
     };
+    let mut count = 0u32;
     for entry in entries.flatten() {
         let name = entry.file_name();
         let name = name.to_string_lossy();
@@ -372,6 +377,7 @@ fn load_agents(dir: &Path, scope: &str, out: &mut Vec<AgentInfo>) {
             icon: fm_field(&fm, "icon"),
             scope: scope.to_string(),
         });
+        count += 1;
     }
 }
 

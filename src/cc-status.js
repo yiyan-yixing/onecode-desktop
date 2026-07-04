@@ -26,7 +26,7 @@ export class CcStatusView {
     this.badgeRoot = badgeRoot; // 徽章容器 DOM
     this.getProjectDir = getProjectDir; // () => string|null 活跃终端 cwd
     this.getActiveBackend = getActiveBackend || (() => null); // () => string|null 活跃后端 ID
-    this.agents = [];
+    this.agents = null; // 初始 null（区别于空数组 []），确保首次返回 [] 时也触发 onAgents
     this.onAgents = null; // agents 列表变更回调（@mention 用）
     this.onStatus = null; // status 数据变更回调（sidebar 用）
     this._lastData = null; // 缓存最新数据供 sidebar 使用
@@ -50,8 +50,8 @@ export class CcStatusView {
     if (backend && backend !== 'claude-code') {
       this._clearBadges();
       // Notify empty agents list
-      if (this.agents.length > 0) {
-        this.agents = [];
+      if (this.agents !== null && this.agents.length > 0) {
+        this.agents = null;
         if (typeof this.onAgents === 'function') this.onAgents([]);
       }
       return;

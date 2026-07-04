@@ -62,9 +62,9 @@ function switchRightTab(tabId) {
   const panelOpen = panel && !panel.classList.contains('collapsed');
   fileExplorer.setVisible(panelOpen && tabId === 'file');
 
-  // When switching to agents tab, refresh the list
+  // When switching to agents tab, force refresh (skip JSON comparison to handle first-load)
   if (tabId === 'agents') {
-    agentsList.refresh();
+    agentsList.forceRefresh();
   }
 }
 
@@ -200,6 +200,14 @@ async function init() {
   agentsList.init(feTabAgents);
   agentsList.setTabManager(tabManager);
   agentsList.setPtyWrite((id, data) => ipc.ptyWrite(id, data));
+  // 如果 ccView 已有 agents 数据（onAgents 可能在 init 前已触发），立即注入
+  if (ccView && ccView.agents && ccView.agents.length > 0) {
+    agentsList.setProvider(() => ccView.agents);
+    agentsList.refresh();
+  } else if (tabManager.agentProvider) {
+    agentsList.setProvider(tabManager.agentProvider);
+    agentsList.refresh();
+  }
 
   // Wire tab bar click handlers
   const tabButtons = filePanel.querySelectorAll('.fe-tab');

@@ -85,8 +85,10 @@ export class AgentsListController {
 
   /** 刷新 agents 列表（数据变更或终端状态变更时调用） */
   refresh() {
-    if (!this._provider || !this._listEl) return;
-    const agents = this._provider();
+    if (!this._listEl) return;
+    const provider = this._provider || (this._tabManager && this._tabManager.agentProvider);
+    if (!provider) return;
+    const agents = provider();
     if (!Array.isArray(agents)) return;
     // Agent objects come from CcStatusView with stable key order;
     // JSON.stringify is used as a cheap structural equality check.
@@ -213,18 +215,31 @@ export class AgentsListController {
     // 路径 1（首选）：复用 MentionController.sendInput — 即 ipc.ptyWrite(id, s) 的封装，
     //   与手动输入 @ 触发 mention 选中后走完全相同的写入路径。
     // 路径 2（兜底）：若 mention controller 不可用，通过注入的 _ptyWrite 回调写入。
-    //   _ptyWrite 返回 Promise（ipc.ptyWrite 封装），.catch 防止未处理 rejection。
+    //   _ptyWrite 返回 Promise（ipc.ptyWrite 封装），.catch 记录错误避免未处理 rejection。
+    let written = false;
     if (st.mention && typeof st.mention.sendInput === 'function') {
       // 若 mention 弹窗正在显示（用户此前输入了 @prefix），先关闭弹窗。
       // 与 MentionController._select 行为一致：先 hide() 清理状态，再 sendInput。
       if (st.mention.active) st.mention.hide();
-      st.mention.sendInput(`@${agentId} `);
-    } else if (this._ptyWrite) {
-      this._ptyWrite(activeId, `@${agentId} `).catch(() => {});
+      try {
+        st.mention.sendInput(`@${agentId} `);
+        written = true;
+      } catch (e) {
+        // mention.sendInput 抛同步异常时回退到 _ptyWrite
+        console.warn('[agents-list] mention.sendInput failed, falling back to ptyWrite:', e);
+      }
+    }
+    if (!written && this._ptyWrite) {
+      this._ptyWrite(activeId, `@${agentId} `).catch((e) => {
+        console.warn('[agents-list] ptyWrite failed:', e);
+      });
+      written = true;
     }
 
-    // 插入后短暂高亮反馈 + 聚焦回终端
-    this._flashAndFocus(itemEl, st);
+    // 仅在成功写入后给视觉反馈（避免无写入时闪烁误导用户）
+    if (written) {
+      this._flashAndFocus(itemEl, st);
+    }
   }
 
   /** 视觉反馈：短暂高亮 + 聚焦终端 */

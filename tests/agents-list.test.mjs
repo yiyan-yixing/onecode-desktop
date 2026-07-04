@@ -191,7 +191,7 @@ describe('F2: 兜底路径 — mention 不可用时走 ptyWrite', () => {
     assert.equal(sent[0].data, '@qa ');
   });
 
-  test('mention 不可用且 _ptyWrite 也未注入 → 静默不写入', () => {
+  test('mention 不可用且 _ptyWrite 也未注入 → 静默不写入且不闪烁', () => {
     const term = { focus() {} };
     const mention = {};
     const tabs = new Map();
@@ -202,8 +202,68 @@ describe('F2: 兜底路径 — mention 不可用时走 ptyWrite', () => {
     ctrl._tabManager = tabManager;
     // _ptyWrite 未注入（默认 null）
 
+    const itemEl = mockItemEl();
     // 不应抛出异常
-    ctrl._onAgentClick('arch', mockItemEl());
+    ctrl._onAgentClick('arch', itemEl);
+    // QA P1-3 fix: 无写入时不闪烁，避免误导
+    assert.equal(itemEl._classList.has('al-mention-flash'), false);
+  });
+
+  test('mention.sendInput 抛异常 → 回退到 _ptyWrite 写入', () => {
+    const sent = [];
+    const term = { focus() {} };
+    const mention = {
+      sendInput: () => { throw new Error('mention broken'); },
+      active: false,
+    };
+    const tabs = new Map();
+    tabs.set('term-1', { id: 'term-1', term, mention, isError: false });
+    const tabManager = { activeId: 'term-1', tabs };
+    const ptyWrite = (id, data) => {
+      sent.push({ path: 'ptyWrite', id, data });
+      return Promise.resolve();
+    };
+
+    const ctrl = new AgentsListController();
+    ctrl._tabManager = tabManager;
+    ctrl._ptyWrite = ptyWrite;
+
+    // 不应抛出异常，应回退到 ptyWrite
+    const itemEl = mockItemEl();
+    ctrl._onAgentClick('arch', itemEl);
+
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].path, 'ptyWrite');
+    assert.equal(sent[0].data, '@arch ');
+    // 回退写入后仍有视觉反馈
+    assert.equal(itemEl._classList.has('al-mention-flash'), true);
+  });
+
+  test('mention.sendInput 抛异常且无 _ptyWrite → 不闪烁', () => {
+    const term = { focus() {} };
+    const mention = {
+      sendInput: () => { throw new Error('mention broken'); },
+      active: false,
+    };
+    const tabs = new Map();
+    tabs.set('term-1', { id: 'term-1', term, mention, isError: false });
+    const tabManager = { activeId: 'term-1', tabs };
+
+    const ctrl = new AgentsListController();
+    ctrl._tabManager = tabManager;
+    // _ptyWrite 未注入
+
+    // Suppress console.warn in this test
+    const origWarn = console.warn;
+    console.warn = () => {};
+
+    try {
+      const itemEl = mockItemEl();
+      ctrl._onAgentClick('arch', itemEl);
+      assert.equal(itemEl._classList.has('al-mention-flash'), false);
+    } finally {
+      console.warn = origWarn;
+    }
   });
 });
 
