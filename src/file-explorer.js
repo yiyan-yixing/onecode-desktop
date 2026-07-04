@@ -239,12 +239,21 @@ export class FileExplorerController {
 
   // ── 导航 ──────────────────────────────────────────────────
 
-  /** 导航到指定路径 */
-  async navigate(path) {
+  /** 导航到指定路径
+   *  @param {string} path - 目标目录路径
+   *  @param {Object} [opts] - 选项
+   *  @param {boolean} [opts.skipClosePreview=false] - 为 true 时跳过关闭预览（自动刷新 / 同路径重载场景） */
+  async navigate(path, opts) {
     if (this._isLoading) return;
-    this._isLoading = true;
-    this.closePreview();
+    const skipClose = opts && opts.skipClosePreview;
 
+    // B1-4 fix: 仅在用户主动导航到不同目录时关闭预览；
+    // 自动刷新（refresh）和同路径重载不应关闭预览。
+    if (!skipClose) {
+      this.closePreview();
+    }
+
+    this._isLoading = true;
     this._currentPath = path;
 
     // 先渲染面包屑（即时反馈）
@@ -266,14 +275,15 @@ export class FileExplorerController {
     }
   }
 
-  /** 刷新当前目录 */
+  /** 刷新当前目录（不关闭已打开的预览） */
   refresh() {
     if (this._currentPath) {
-      this.navigate(this._currentPath);
+      this.navigate(this._currentPath, { skipClosePreview: true });
     }
   }
 
-  /** 同步终端 cwd（终端切换时调用） */
+  /** 同步终端 cwd（终端切换时调用）
+   *  B1-5: 仅当 cwd 真正变化时才导航（已有守卫），导航时关闭预览是合理的 */
   syncCwd(cwd) {
     if (!cwd) return;
     // 如果当前没有路径或 cwd 变化了，自动导航
@@ -507,6 +517,8 @@ export class FileExplorerController {
       }
       // 启动自动刷新（每 15 秒）
       // P1-20: Skip IPC refresh when file panel is collapsed
+      // B1-4: refresh() now passes skipClosePreview:true so auto-refresh
+      //        does not kill the file preview panel.
       this._stopRefresh();
       this._refreshTimer = setInterval(() => {
         const panel = document.getElementById('filePanel');
