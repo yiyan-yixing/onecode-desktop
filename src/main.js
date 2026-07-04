@@ -41,6 +41,7 @@ let _activeRightTab;
 try { _activeRightTab = localStorage.getItem('fe-active-tab') || 'file'; } catch { _activeRightTab = 'file'; }
 
 function switchRightTab(tabId) {
+  if (tabId !== 'file' && tabId !== 'agents') tabId = 'file';
   _activeRightTab = tabId;
   try { localStorage.setItem('fe-active-tab', tabId); } catch {}
 

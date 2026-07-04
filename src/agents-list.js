@@ -34,6 +34,9 @@ function esc(s) {
   }[c]));
 }
 
+/** 合法的 Tab ID 白名单 */
+const VALID_TABS = new Set(['file', 'agents']);
+
 export class AgentsListController {
   constructor() {
     this._container = null;
@@ -56,7 +59,8 @@ export class AgentsListController {
   /** 刷新 agents 列表（数据变更时调用） */
   refresh() {
     if (!this._provider || !this._listEl) return;
-    const agents = this._provider() || [];
+    const agents = this._provider();
+    if (!Array.isArray(agents)) return;
     if (JSON.stringify(agents) !== JSON.stringify(this._agents)) {
       this._agents = agents;
       this._renderList();
@@ -109,7 +113,7 @@ export class AgentsListController {
 
       // 图标颜色：优先使用 agent.color（需通过 hex 校验），否则自动生成
       const color = (agent.color && isValidHexColor(agent.color)) ? agent.color : colorForId(agent.id);
-      const iconText = agent.icon || agent.name.charAt(0).toUpperCase();
+      const iconText = agent.icon || (agent.name && agent.name.charAt(0).toUpperCase()) || '?';
 
       // Scope 标签颜色
       const scopeStyle = SCOPE_COLORS[agent.scope] || SCOPE_COLORS.global;

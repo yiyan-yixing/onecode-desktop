@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] — 2026-07-04
+
+### Added
+
+- Right sidebar Tab switching between file and agents views
+- Agents list panel — shows project and global agents with icon, name, @id, description, scope label
+- Auto-refresh agents list when switching terminal/project
+- Panel collapse/expand preserves last selected Tab via localStorage
+- Empty state prompt when no agents are available
+- Warm theme styling for Tab bar and agents list (consistent with left sidebar)
+
+### Changed
+
+- File explorer now renders inside the file Tab container (no behavior change, structural refactor)
+- Cmd+Shift+F shortcut opens right panel and activates file Tab
+
 ## [0.1.0] — 2025-06-28
 
 ### Added
@@ -14,7 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Project card right-click context menu (open terminal, show in Finder, delete)
 - Custom confirmation dialog (replaces native `confirm()`)
 - IPC disconnection detection banner (3+ consecutive failures)
-- Palette settings save feedback (✓/✗ visual indicators)
+- Palette settings save feedback (check/cross visual indicators)
 - Project list loading state
 - Ambient controller — statusbar fades after 8s idle
 - Sensitive directory protection in file explorer (~/.ssh, ~/.gnupg, etc.)
