@@ -140,6 +140,37 @@ body::before {
 
 .titlebar-spacer { flex: 1; }
 
+/* ── Title bar: preview filename ── */
+
+.titlebar-filename {
+  display: none;
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--tx-warm2);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 50%;
+  text-align: center;
+  pointer-events: none;
+}
+
+.titlebar-filename.on {
+  display: inline;
+}
+
+.titlebar-close-preview {
+  display: none !important;
+}
+
+.titlebar-close-preview.on {
+  display: flex !important;
+}
+
 .titlebar-btn {
   -webkit-app-region: no-drag;
   display: flex;
@@ -197,6 +228,7 @@ body::before {
   overflow: hidden;
   background: var(--cream);
   gap: 0;
+  position: relative;
 }
 
 /* ── Terminal Panel (dark prompt block) ── */
@@ -1611,13 +1643,13 @@ body::before {
   color: #ef4444;
 }
 
-/* ── 预览面板 ── */
+/* ── 预览面板（覆盖整个 .content 区域） ── */
 
 .fe-preview {
   position: absolute;
   inset: 0;
   background: var(--cream);
-  z-index: 10;
+  z-index: 100;
   display: none;
   flex-direction: column;
   animation: fe-preview-in 200ms var(--ease-out);
@@ -1628,59 +1660,18 @@ body::before {
 }
 
 @keyframes fe-preview-in {
-  from { opacity: 0; transform: translateX(20px); }
-  to   { opacity: 1; transform: translateX(0); }
-}
-
-.fe-preview-header {
-  display: flex;
-  align-items: center;
-  position: relative;
-  height: 34px;
-  padding: 0 10px;
-  border-bottom: 1px solid var(--sand);
-}
-
-.fe-preview-title {
-  position: absolute;
-  left: 50%;
-  transform: translateX(-50%);
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--tx-warm2);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 70%;
-  font-family: var(--font-mono);
-}
-
-.fe-preview-close {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  margin-left: auto;
-  border: none;
-  background: none;
-  color: var(--tx-warm4);
-  cursor: pointer;
-  border-radius: var(--r-xs);
-  font-size: 14px;
-  transition: background var(--dur-fast), color var(--dur-fast);
-}
-
-.fe-preview-close:hover {
-  background: var(--sand);
-  color: var(--tx-warm);
+  from { opacity: 0; }
+  to   { opacity: 1; }
 }
 
 .fe-preview-body {
   flex: 1;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 16px 20% 24px;
+  padding: 24px 48px 32px;
+  max-width: 960px;
+  width: 100%;
+  margin: 0 auto;
 }
 
 /* Markdown 预览 */

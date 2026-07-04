@@ -209,23 +209,26 @@ export class FileExplorerController {
     c.appendChild(tree);
     this._treeEl = tree;
 
-    // ── 预览面板（覆盖在文件列表上） ──
+    // ── 预览面板（覆盖整个 .content 区域，文件名在标题栏） ──
     const preview = document.createElement('div');
     preview.className = 'fe-preview';
-
-    const previewHeader = document.createElement('div');
-    previewHeader.className = 'fe-preview-header';
-    previewHeader.innerHTML = '<span class="fe-preview-title"></span><button class="fe-preview-close" title="关闭预览">✕</button>';
-    previewHeader.querySelector('.fe-preview-close').addEventListener('click', () => this.closePreview());
-    preview.appendChild(previewHeader);
 
     const previewBody = document.createElement('div');
     previewBody.className = 'fe-preview-body';
     preview.appendChild(previewBody);
 
-    c.appendChild(preview);
+    // Append to .content so it covers sidebar + terminal + file panel
+    const contentEl = document.querySelector('.content');
+    if (contentEl) contentEl.appendChild(preview);
+
     this._previewEl = preview;
     this._previewBody = previewBody;
+
+    // Title bar close-preview button
+    const tbClose = document.getElementById('titlebarClosePreview');
+    if (tbClose) {
+      tbClose.addEventListener('click', () => this.closePreview());
+    }
 
     // Escape 关闭预览
     this._keyHandler = (e) => {
@@ -397,9 +400,13 @@ export class FileExplorerController {
   async openFile(name, path, fileType) {
     const preview = this._previewEl;
     const body = this._previewBody;
-    const title = preview.querySelector('.fe-preview-title');
 
-    title.textContent = name;
+    // Show filename in title bar
+    const tbFilename = document.getElementById('titlebarFilename');
+    if (tbFilename) { tbFilename.textContent = name; tbFilename.classList.add('on'); }
+    const tbClose = document.getElementById('titlebarClosePreview');
+    if (tbClose) tbClose.classList.add('on');
+
     body.innerHTML = '<div class="fe-loading">加载中…</div>';
     preview.classList.add('on');
 
@@ -505,6 +512,11 @@ export class FileExplorerController {
       this._previewEl.classList.remove('on');
       this._previewBody.innerHTML = '';
     }
+    // Hide filename from title bar
+    const tbFilename = document.getElementById('titlebarFilename');
+    if (tbFilename) { tbFilename.textContent = ''; tbFilename.classList.remove('on'); }
+    const tbClose = document.getElementById('titlebarClosePreview');
+    if (tbClose) tbClose.classList.remove('on');
   }
 
   /** Tab 可见时开始自动刷新，Tab 隐藏时停止 */
