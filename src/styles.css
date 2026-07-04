@@ -2225,3 +2225,51 @@ body::before {
   text-transform: lowercase;
   letter-spacing: 0.3px;
 }
+
+/* F2: Agents list click — disabled state, mention flash, toast */
+
+.al-item.al-disabled {
+  opacity: 0.4;
+  pointer-events: auto; /* still clickable to show toast */
+  cursor: default;
+}
+
+.al-item.al-disabled:hover {
+  background: transparent;
+}
+
+.al-item.al-disabled:active {
+  background: transparent;
+}
+
+.al-item.al-mention-flash, .al-item.al-mention-flash:hover, .al-item.al-mention-flash:active {
+  background: rgba(5, 150, 105, 0.1);
+  transition: background 0.15s ease-out;
+}
+
+.al-toast {
+  position: absolute;
+  bottom: 8px;
+  left: 50%;
+  transform: translateX(-50%) translateY(8px);
+  opacity: 0;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+  pointer-events: none;
+  z-index: 10;
+}
+
+.al-toast.on {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+.al-toast-msg {
+  display: inline-block;
+  padding: 4px 10px;
+  font-size: 11px;
+  color: var(--tx-warm2);
+  background: var(--linen);
+  border: 1px solid var(--clay);
+  border-radius: 4px;
+  white-space: nowrap;
+}

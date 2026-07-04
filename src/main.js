@@ -133,6 +133,8 @@ async function init() {
     }
     // 切换标签页/目录时刷新 CC Status 徽章
     if (ccView) ccView.refresh();
+    // P1-1 fix: 标记终端状态变更，确保下次切到 agents tab 时 disabled 状态正确更新
+    agentsList.markTerminalStateChanged();
     // 切换项目时刷新 agents 列表（仅面板展开且 agents tab 活跃时）
     if (panelOpen && _activeRightTab === 'agents') {
       agentsList.forceRefresh();
@@ -196,6 +198,8 @@ async function init() {
 
   // AgentsListController renders into the agents tab content container
   agentsList.init(feTabAgents);
+  agentsList.setTabManager(tabManager);
+  agentsList.setPtyWrite((id, data) => ipc.ptyWrite(id, data));
 
   // Wire tab bar click handlers
   const tabButtons = filePanel.querySelectorAll('.fe-tab');
