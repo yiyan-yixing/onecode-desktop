@@ -21,6 +21,7 @@ import { PaletteController } from './palette.js';
 import { RippleController } from './ripple.js';
 import { CcStatusView } from './cc-status.js';
 import { FileExplorerController } from './file-explorer.js';
+import { AgentsListController } from './agents-list.js';
 import { ThemeManager } from './theme.js';
 import { AmbientController } from './ambient.js';
 import { initWizard, destroyWizard } from './wizard.js';
@@ -30,9 +31,41 @@ const orbital = new OrbitalController();
 const palette = new PaletteController();
 const ripple = new RippleController();
 const fileExplorer = new FileExplorerController();
+const agentsList = new AgentsListController();
 const themeManager = new ThemeManager();
 const ambientController = new AmbientController();
 let ccView = null;
+
+// ── Right panel Tab state ──────────────────────────────────────────
+let _activeRightTab;
+try { _activeRightTab = localStorage.getItem('fe-active-tab') || 'file'; } catch { _activeRightTab = 'file'; }
+
+function switchRightTab(tabId) {
+  _activeRightTab = tabId;
+  try { localStorage.setItem('fe-active-tab', tabId); } catch {}
+
+  // Update tab button styles
+  const tabs = document.querySelectorAll('.fe-tab');
+  tabs.forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.tab === tabId);
+  });
+
+  // Show/hide tab content
+  const fileTab = document.getElementById('feTabFile');
+  const agentsTab = document.getElementById('feTabAgents');
+  if (fileTab) fileTab.classList.toggle('active', tabId === 'file');
+  if (agentsTab) agentsTab.classList.toggle('active', tabId === 'agents');
+
+  // Update fileExplorer visibility based on active tab and panel open state
+  const panel = document.getElementById('filePanel');
+  const panelOpen = panel && !panel.classList.contains('collapsed');
+  fileExplorer.setVisible(panelOpen && tabId === 'file');
+
+  // When switching to agents tab, refresh the list
+  if (tabId === 'agents') {
+    agentsList.refresh();
+  }
+}
 
 // ── P1-13: Backend disconnected banner ──────────────────────────────
 let _disconnectBanner = null;
@@ -91,13 +124,18 @@ async function init() {
     orbital.setActive(tm.activeId);
     // 定期刷新项目列表（项目增删时），但不阻塞切换体验
     orbital._loadProjects();
-    // 同步文件浏览器 cwd（右侧面板展开时）
+    // 同步文件浏览器 cwd（右侧面板展开且 file tab 活跃时）
     const filePanel = document.getElementById('filePanel');
-    if (filePanel && !filePanel.classList.contains('collapsed') && fileExplorer) {
+    const panelOpen = filePanel && !filePanel.classList.contains('collapsed');
+    if (panelOpen && _activeRightTab === 'file' && fileExplorer) {
       fileExplorer.syncCwd(tm.getActiveCwd());
     }
     // 切换标签页/目录时刷新 CC Status 徽章
     if (ccView) ccView.refresh();
+    // 切换项目时刷新 agents 列表（仅面板展开且 agents tab 活跃时）
+    if (panelOpen && _activeRightTab === 'agents') {
+      agentsList.forceRefresh();
+    }
   };
 
   initKeybindings(tabManager);
@@ -111,6 +149,9 @@ async function init() {
   ccView.onAgents = (agents) => {
     tabManager.agentProvider = () => agents;
     palette.setAgentProvider(() => agents);
+    // Also update agents list controller
+    agentsList.setProvider(() => agents);
+    agentsList.refresh();
   };
   ccView.onStatus = (data) => {
     // Also update statusbar badges
@@ -144,19 +185,45 @@ async function init() {
     }
   });
 
-  // Right panel toggle button in titlebar
+  // Right panel: init Tab bar + controllers
   const filePanel = document.getElementById('filePanel');
-  fileExplorer.init(filePanel, tabManager);
+  const feTabFile = document.getElementById('feTabFile');
+  const feTabAgents = document.getElementById('feTabAgents');
+
+  // FileExplorerController renders into the file tab content container
+  fileExplorer.init(feTabFile, tabManager);
+
+  // AgentsListController renders into the agents tab content container
+  agentsList.init(feTabAgents);
+
+  // Wire tab bar click handlers
+  const tabButtons = filePanel.querySelectorAll('.fe-tab');
+  tabButtons.forEach((btn) => {
+    btn.addEventListener('click', () => {
+      switchRightTab(btn.dataset.tab);
+    });
+  });
+
+  // Restore last active tab
+  switchRightTab(_activeRightTab);
+
+  // Right panel toggle button in titlebar
   const rpToggle = document.getElementById('rightPanelToggle');
   rpToggle?.addEventListener('click', () => {
     const panel = document.getElementById('filePanel');
     if (panel) {
       panel.classList.toggle('collapsed');
       const isOpen = !panel.classList.contains('collapsed');
-      fileExplorer.setVisible(isOpen);
       rpToggle?.classList.toggle('on', isOpen);
       if (isOpen) {
-        fileExplorer.syncCwd(tabManager.getActiveCwd());
+        if (_activeRightTab === 'file') {
+          fileExplorer.setVisible(true);
+          fileExplorer.syncCwd(tabManager.getActiveCwd());
+        } else if (_activeRightTab === 'agents') {
+          agentsList.refresh();
+        }
+      } else {
+        fileExplorer.setVisible(false);
       }
     }
   });
@@ -257,14 +324,17 @@ function initKeybindings(tm) {
       }
       return;
     }
-    // Cmd+Shift+F → open file panel
+    // Cmd+Shift+F → open right panel and switch to file tab
     if (e[mod] && e.shiftKey && e.key.toLowerCase() === 'f') {
       e.preventDefault();
       const panel = document.getElementById('filePanel');
       if (panel) {
         panel.classList.remove('collapsed');
+        switchRightTab('file');
         fileExplorer.setVisible(true);
         fileExplorer.syncCwd(tm.getActiveCwd());
+        const rpBtn = document.getElementById('rightPanelToggle');
+        rpBtn?.classList.add('on');
       }
       return;
     }

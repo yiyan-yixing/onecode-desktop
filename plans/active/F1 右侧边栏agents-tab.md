@@ -1,6 +1,6 @@
 # F1: 右侧边栏增加 Tab 切换 — [ file | agents ]
 
-> **类型:** 功能 | **优先级:** 中 | **状态:** 🟡 排期中
+> **类型:** 功能 | **优先级:** 中 | **状态:** 🟢 实现完成
 > **目标完成:** 2026-07-15 (二)
 
 ## 需求描述
@@ -31,13 +31,13 @@
 
 | 编号 | 任务 | 估时 | 负责人 | 状态 | 依赖 |
 |------|------|------|--------|------|------|
-| F1-1 | 右侧边栏 Tab 栏 UI：设计并实现 [ file \| agents ] Tab 切换条（HTML + CSS） | 3h | @dev | TODO | — |
-| F1-2 | Tab 切换逻辑：点击 Tab 切换显示对应面板内容，切换时保持各 Tab 状态 | 2h | @dev | TODO | F1-1 |
-| F1-3 | File Tab 适配：将现有 FileExplorerController 的 DOM 包裹进 file Tab 容器，确保功能不变 | 2h | @dev | TODO | F1-2 |
-| F1-4 | Agents Tab 数据层：复用 CcStatusView 的 agents 数据，确保切换项目时自动刷新 | 2h | @dev | TODO | F1-2 |
-| F1-5 | Agents Tab UI 列表：渲染 agents 列表（icon + name + description + scope 标签），新建 AgentsListController | 3h | @dev | TODO | F1-4 |
-| F1-6 | Tab 状态持久化：记忆上次选中的 Tab，下次打开面板时恢复 | 1h | @dev | TODO | F1-3, F1-5 |
-| F1-7 | 样式适配：Tab 栏 + Agents 列表适配 warm 主题（与左侧 sidebar 风格一致） | 1h | @dev | TODO | F1-5 |
+| F1-1 | 右侧边栏 Tab 栏 UI：设计并实现 [ file \| agents ] Tab 切换条（HTML + CSS） | 3h | @dev | DONE | — |
+| F1-2 | Tab 切换逻辑：点击 Tab 切换显示对应面板内容，切换时保持各 Tab 状态 | 2h | @dev | DONE | F1-1 |
+| F1-3 | File Tab 适配：将现有 FileExplorerController 的 DOM 包裹进 file Tab 容器，确保功能不变 | 2h | @dev | DONE | F1-2 |
+| F1-4 | Agents Tab 数据层：复用 CcStatusView 的 agents 数据，确保切换项目时自动刷新 | 2h | @dev | DONE | F1-2 |
+| F1-5 | Agents Tab UI 列表：渲染 agents 列表（icon + name + description + scope 标签），新建 AgentsListController | 3h | @dev | DONE | F1-4 |
+| F1-6 | Tab 状态持久化：记忆上次选中的 Tab，下次打开面板时恢复 | 1h | @dev | DONE | F1-3, F1-5 |
+| F1-7 | 样式适配：Tab 栏 + Agents 列表适配 warm 主题（与左侧 sidebar 风格一致） | 1h | @dev | DONE | F1-5 |
 | F1-8 | 测试：Tab 切换正常、Agents 列表正确渲染、面板折叠/展开不影响 Tab 状态 | 1h | @qa | TODO | F1-6, F1-7 |
 
 ## 估时总计
@@ -49,10 +49,20 @@
 
 ## 目标完成日期
 
-- Tab UI + 切换逻辑: 2026-07-11 (五)
-- File Tab 适配 + Agents 数据层: 2026-07-13 (日)
-- Agents UI + 样式: 2026-07-15 (二)
-- 测试通过: 2026-07-15 (二)
+- Tab UI + 切换逻辑: 2026-07-11 (五) — DONE
+- File Tab 适配 + Agents 数据层: 2026-07-13 (日) — DONE
+- Agents UI + 样式: 2026-07-15 (二) — DONE
+- 测试通过: 2026-07-15 (二) — 待 @qa
+
+## 实现变更文件
+
+| 文件 | 变更类型 | 说明 |
+|------|----------|------|
+| `src/agents-list.js` | 新增 | AgentsListController：渲染 agents 列表（icon + name + @id + description + scope） |
+| `src/index.html` | 修改 | #filePanel 内添加 Tab 栏 + 两个 Tab 内容容器（#feTabFile / #feTabAgents） |
+| `src/main.js` | 修改 | import AgentsListController；Tab 切换逻辑；连线 agents 数据提供者；面板切换适配 |
+| `src/file-explorer.js` | 修改 | init() 接收 #feTabFile 容器而非 #filePanel（功能不变） |
+| `src/styles.css` | 修改 | 添加 .fe-tabs/.fe-tab/.fe-tab-content + .al-* agents 列表 + .sidebar-right 样式 |
 
 ## 验收标准
 

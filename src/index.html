@@ -54,7 +54,17 @@
       </div>
 
       <!-- File Panel (warm, right) -->
-      <aside class="sidebar sidebar-right collapsed" id="filePanel"></aside>
+      <aside class="sidebar sidebar-right collapsed" id="filePanel">
+        <!-- Tab Bar: [ file | agents ] -->
+        <div class="fe-tabs">
+          <button class="fe-tab active" data-tab="file">file</button>
+          <button class="fe-tab" data-tab="agents">agents</button>
+        </div>
+        <!-- File Tab Content -->
+        <div class="fe-tab-content active" id="feTabFile"></div>
+        <!-- Agents Tab Content -->
+        <div class="fe-tab-content" id="feTabAgents"></div>
+      </aside>
     </div>
 
     <!-- Status Bar -->
