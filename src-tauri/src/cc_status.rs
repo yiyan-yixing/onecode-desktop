@@ -350,7 +350,6 @@ fn load_agents(dir: &Path, scope: &str, out: &mut Vec<AgentInfo>) {
         Ok(e) => e,
         Err(_) => return,
     };
-    let mut count = 0u32;
     for entry in entries.flatten() {
         let name = entry.file_name();
         let name = name.to_string_lossy();
@@ -377,7 +376,6 @@ fn load_agents(dir: &Path, scope: &str, out: &mut Vec<AgentInfo>) {
             icon: fm_field(&fm, "icon"),
             scope: scope.to_string(),
         });
-        count += 1;
     }
 }
 
