@@ -2148,10 +2148,29 @@ body::before {
   color: var(--tx-warm2);
   transition: background var(--dur-fast);
   min-height: 32px;
+  cursor: pointer;
+  position: relative;
 }
 
 .al-item:hover {
   background: var(--linen);
+}
+
+.al-item:hover::after {
+  content: '点选';
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 9px;
+  font-weight: 600;
+  color: var(--sky);
+  opacity: 0.7;
+  pointer-events: none;
+}
+
+.al-item:hover .al-scope {
+  opacity: 0;
 }
 
 .al-item:active {
@@ -2195,15 +2214,8 @@ body::before {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-.al-id {
-  font-family: var(--font-mono);
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--sky);
-  white-space: nowrap;
-  flex-shrink: 0;
+  flex: 1;
+  min-width: 0;
 }
 
 .al-desc {
@@ -2224,6 +2236,7 @@ body::before {
   line-height: 14px;
   text-transform: lowercase;
   letter-spacing: 0.3px;
+  transition: opacity var(--dur-fast);
 }
 
 /* F2: Agents list click — disabled state, mention flash, toast */

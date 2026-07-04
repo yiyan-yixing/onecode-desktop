@@ -166,7 +166,6 @@ export class AgentsListController {
         `<div class="al-info">` +
           `<div class="al-name-row">` +
             `<span class="al-name">${esc(agent.name)}</span>` +
-            `<span class="al-id">@${esc(agent.id)}</span>` +
           `</div>` +
           (agent.description
             ? `<div class="al-desc">${esc(agent.description)}</div>`
