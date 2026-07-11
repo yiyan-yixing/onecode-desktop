@@ -66,11 +66,15 @@ fn on_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
         }
         "tray:show" => show_window(app),
         "tray:quit" => {
-            // 通知前端保存会话（尽力而为，前端已按变更实时保存，此处兜底）
+            // 通知前端关闭所有终端 tab + 保存会话
             let _ = app.emit("app:before-quit", ());
+            // 给前端时间完成 closeAllTabs()（每个 tab 需要 ptyKill IPC + dispose）
+            // 不等的话前端 closeTab 还没跑完进程就退了，xterm 和 DOM 都不会清理
+            std::thread::sleep(std::time::Duration::from_millis(300));
             // 释放阻止休眠的 assertion
+            crate::keep_awake::allow_display_sleep();
             crate::keep_awake::allow_idle_sleep();
-            // kill 所有 PTY（同步，防止残留；PTY 关闭也会 SIGHUP 子进程组）
+            // kill 所有 PTY（兜底：前端 closeTab 已 ptyKill，此处处理遗漏的）
             if let Some(mgr) = app.try_state::<MultiPtyManager>() {
                 mgr.kill_all_blocking();
             }

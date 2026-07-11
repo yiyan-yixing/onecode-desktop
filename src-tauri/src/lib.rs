@@ -88,6 +88,11 @@ pub fn run() {
             // 阻止系统空闲休眠（允许屏幕熄灭，合盖仍休眠）
             keep_awake::prevent_idle_sleep();
 
+            // 屏幕防熄屏由 PTY 活跃状态驱动：
+            // - spawn() 创建第一个 PTY 时激活（幂等）
+            // - kill() 关闭最后一个 PTY 时释放
+            // - kill_all_blocking() 退出时释放
+
             // 健康检测后台循环
             pty::health::start_loop(app.handle().clone());
 

@@ -252,7 +252,7 @@ async function init() {
 
   // Lifecycle
   ipc.onTrayNewTerminal(() => tabManager.createTab());
-  ipc.onAppBeforeQuit(() => tabManager.persistNow());
+  ipc.onAppBeforeQuit(() => tabManager.closeAllTabs());
   ipc.onHealthReport((reports) => showHealthWarning(reports));
 }
 

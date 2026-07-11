@@ -676,6 +676,17 @@ export class TabManager {
     try { await ipc.sessionPersist(); } catch (_) {}
   }
 
+  /** 关闭所有终端 tab（退出时调用）。先保存会话，再逐个 closeTab。 */
+  async closeAllTabs() {
+    // 先保存会话（closeTab 会触发 _scheduleSave，但退出前先显式保存更稳妥）
+    await this.persistNow();
+    // 收集所有 id（closeTab 会从 this.tabs/delete 中删除，不能边遍历边删）
+    const ids = [...this.tabs.keys()];
+    for (const id of ids) {
+      await this.closeTab(id);
+    }
+  }
+
   _scheduleSave() {
     if (this._saveTimer) clearTimeout(this._saveTimer);
     this._saveTimer = setTimeout(() => {

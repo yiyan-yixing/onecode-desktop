@@ -174,20 +174,27 @@ impl MultiPtyManager {
             inner.slots.insert(id, slot);
             inner.channels.insert(id, data_channel);
         }
+        // 第一个 PTY 创建 → 屏幕不熄灭（和视频播放器效果一致，幂等调用）
+        crate::keep_awake::prevent_display_sleep();
         Ok((id, pid))
     }
 
     /// 关闭终端：从管理表移除，终止进程（mark_closed 让 wait 线程退出且不自动重启）。
     pub async fn kill(&self, id: Uuid) -> Result<()> {
-        let slot = {
+        let (slot, is_empty) = {
             let mut inner = self.inner.write().await;
             inner.channels.remove(&id);
-            inner.slots.remove(&id)
+            let slot = inner.slots.remove(&id);
+            (slot, inner.slots.is_empty())
         };
         if let Some(slot) = slot {
             slot.mark_closed();
             let _ = slot.kill();
             slot.clear_buffer();
+        }
+        // 最后一个 PTY 关闭 → 恢复屏幕正常熄灭行为
+        if is_empty {
+            crate::keep_awake::allow_display_sleep();
         }
         Ok(())
     }
@@ -344,6 +351,8 @@ impl MultiPtyManager {
             s.mark_closed(); // 让 wait 线程不自动重启
             let _ = s.kill();
         }
+        // 所有 PTY 已关闭 → 恢复屏幕正常熄灭行为
+        crate::keep_awake::allow_display_sleep();
     }
 
     /// 尝试获取所有终端 slot 的列表用于 kill_all。
