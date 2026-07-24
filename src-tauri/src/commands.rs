@@ -271,6 +271,92 @@ pub async fn load_config(cfg_mgr: State<'_, ConfigManager>) -> Result<AppConfig,
     Ok(cfg.clone())
 }
 
+#[derive(serde::Serialize)]
+pub struct ConfigField {
+    pub key: String,
+    pub label: String,
+    pub description: String,
+    #[serde(rename = "type")]
+    pub field_type: String,
+    pub default: serde_json::Value,
+}
+
+#[tauri::command]
+pub async fn get_config_path() -> Result<String, String> {
+    Ok(crate::config::config_path()
+        .to_string_lossy()
+        .to_string())
+}
+
+#[tauri::command]
+pub async fn get_config_schema() -> Result<Vec<ConfigField>, String> {
+    Ok(vec![
+        ConfigField {
+            key: "default_cmd".into(),
+            label: "默认命令".into(),
+            description: "终端启动时执行的默认命令".into(),
+            field_type: "string".into(),
+            default: serde_json::json!("claude"),
+        },
+        ConfigField {
+            key: "default_args".into(),
+            label: "默认参数".into(),
+            description: "默认命令的启动参数（数组 / 空格分隔）".into(),
+            field_type: "array".into(),
+            default: serde_json::json!(["--permission-mode", "bypassPermissions"]),
+        },
+        ConfigField {
+            key: "default_cwd".into(),
+            label: "工作目录".into(),
+            description: "终端启动时的默认工作目录".into(),
+            field_type: "string".into(),
+            default: serde_json::json!("~/.onecode/workspace"),
+        },
+        ConfigField {
+            key: "max_terminals".into(),
+            label: "最大终端数".into(),
+            description: "允许同时运行的最大终端数量".into(),
+            field_type: "number".into(),
+            default: serde_json::json!(30),
+        },
+        ConfigField {
+            key: "ring_buffer_max_mb".into(),
+            label: "缓冲区大小".into(),
+            description: "每个终端环形缓冲区的最大大小（MB）".into(),
+            field_type: "number".into(),
+            default: serde_json::json!(10),
+        },
+        ConfigField {
+            key: "api_key".into(),
+            label: "API Key".into(),
+            description: "AI API 的认证密钥".into(),
+            field_type: "string".into(),
+            default: serde_json::json!(""),
+        },
+        ConfigField {
+            key: "base_url".into(),
+            label: "Base URL".into(),
+            description: "AI API 的基础 URL（如自建代理）".into(),
+            field_type: "string".into(),
+            default: serde_json::json!("https://api.anthropic.com"),
+        },
+        ConfigField {
+            key: "model".into(),
+            label: "Model".into(),
+            description: "AI 模型标识符".into(),
+            field_type: "string".into(),
+            default: serde_json::json!("claude-sonnet-4-6"),
+        },
+        ConfigField {
+            key: "default_backend".into(),
+            label: "默认后端".into(),
+            description: "终端使用的 AI 后端内核（claude-code / opencode / codex 等）".into(),
+            field_type: "string".into(),
+            default: serde_json::json!("claude-code"),
+        },
+    ])
+}
+
 // ── 项目管理 ──────────────────────────────────────────────────────────
 
 #[derive(serde::Deserialize)]

@@ -5,8 +5,10 @@
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
+use tauri::Emitter;
 use tokio::sync::RwLock;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -76,7 +78,7 @@ impl Default for AppConfig {
 }
 
 /// 配置文件路径：~/.onecode/desktop.json
-fn config_path() -> PathBuf {
+pub fn config_path() -> PathBuf {
     let home = std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
         .unwrap_or_else(|_| ".".to_string());
@@ -123,6 +125,7 @@ pub fn save_to_file(cfg: &AppConfig) -> Result<(), String> {
 }
 
 /// 可变配置管理器（Arc<RwLock> 允许前端通过 IPC 修改配置）
+#[derive(Clone)]
 pub struct ConfigManager {
     inner: Arc<RwLock<AppConfig>>,
 }
@@ -188,4 +191,48 @@ impl ConfigUpdate {
             cfg.default_backend = v.clone();
         }
     }
+}
+
+/// 启动配置文件热加载：每 2 秒轮询 ~/.onecode/desktop.json，
+/// 检测外部变更（agent 直接修改）后自动重载配置并通知前端。
+pub fn start_config_watcher(mut_cfg: Arc<RwLock<AppConfig>>, app_handle: tauri::AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        let path = config_path();
+        let mut last_content: Option<String> = None;
+
+        loop {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+
+            let current = match fs::read_to_string(&path) {
+                Ok(c) => Some(c),
+                Err(_) => {
+                    // 文件不存在或无法读取 → 记录空哨兵（仅首次）
+                    if last_content.is_none() {
+                        last_content = Some(String::new());
+                    }
+                    continue;
+                }
+            };
+
+            if current == last_content {
+                continue;
+            }
+
+            // 内容发生变化 → 解析并重载
+            if let Some(ref content) = current {
+                match serde_json::from_str::<AppConfig>(content) {
+                    Ok(cfg) => {
+                        let mut w = mut_cfg.write().await;
+                        *w = cfg;
+                        log::info!("[config] reloaded from external change ({})", path.display());
+                        let _ = app_handle.emit("config-changed", ());
+                    }
+                    Err(e) => {
+                        log::warn!("[config] external file parse failed: {e}");
+                    }
+                }
+            }
+            last_content = current;
+        }
+    });
 }

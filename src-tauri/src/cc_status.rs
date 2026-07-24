@@ -28,9 +28,12 @@ const TTL: Duration = Duration::from_secs(5);
 pub struct CcStatus {
     pub skills: Vec<SkillInfo>,
     pub hooks: HashMap<String, Vec<HookInfo>>,
+    pub statusline: Vec<HookInfo>,   // StatusLine 钩子单独提取
     pub plugins: Vec<PluginInfo>,
     pub tasks: Vec<TaskInfo>,
     pub agents: Vec<AgentInfo>,
+    /// 执行 statusLine 命令的输出（项目 scope 优先，无则回退全局）
+    pub status_line_output: Option<String>,
 }
 
 #[derive(serde::Serialize, Clone)]
@@ -146,6 +149,12 @@ fn load_cc_status(global_dir: &Path, project_dir: Option<&Path>) -> CcStatus {
         load_tasks(dir, scope, &mut out.tasks);
         load_agents(dir, scope, &mut out.agents);
     }
+    // 从 hooks 中提取 StatusLine 钩子单独存放（前端 statusline 指标）
+    if let Some(sl_hooks) = out.hooks.remove("StatusLine") {
+        out.statusline = sl_hooks;
+    }
+    // 读取 statusLine 配置并执行命令（项目 scope 优先，全局兜底）
+    load_status_line(&scopes, project_dir, &mut out.status_line_output);
     out
 }
 
@@ -377,6 +386,76 @@ fn load_agents(dir: &Path, scope: &str, out: &mut Vec<AgentInfo>) {
             scope: scope.to_string(),
         });
     }
+}
+
+/// 读取 settings.json 的 statusLine 配置并执行命令，结果写入 status_line_output。
+/// 项目 scope 优先，若项目无配置则回退到全局。
+/// 命令通过 bash -c 执行，3 秒超时，仅成功退出且有 stdout 的输出才会被采纳。
+fn load_status_line(
+    scopes: &[(PathBuf, &str)],
+    project_dir: Option<&Path>,
+    out: &mut Option<String>,
+) {
+    // 反向迭代：scopes = [global, project]，reverse → 项目优先
+    for (dir, _scope) in scopes.iter().rev() {
+        for f in ["settings.json", "settings.local.json"] {
+            let s = match read_json(&dir.join(f)) {
+                Some(v) => v,
+                None => continue,
+            };
+            let sl = match s.get("statusLine") {
+                Some(v) => v,
+                None => continue,
+            };
+            let cmd_type = match sl.get("type").and_then(|v| v.as_str()) {
+                Some("command") => "command",
+                _ => continue,
+            };
+            let cmd = match sl.get("command").and_then(|v| v.as_str()) {
+                Some(c) if !c.is_empty() => c,
+                _ => continue,
+            };
+            // 执行命令（bash -c），3 秒超时
+            let result = run_bash_with_timeout(cmd, project_dir);
+            if let Some(ref output) = result {
+                *out = Some(output.clone());
+                return; // project scope 命中即返回
+            }
+        }
+    }
+}
+
+/// 通过 bash -c 执行命令，3 秒超时，返回 stdout 首行（trim 后非空则采纳）。
+fn run_bash_with_timeout(cmd: &str, cwd: Option<&Path>) -> Option<String> {
+    use std::sync::mpsc;
+    use std::thread;
+    use std::time::Duration;
+
+    let cmd = cmd.to_string();
+    let cwd = cwd.map(|p| p.to_path_buf());
+    let (tx, rx) = mpsc::channel();
+
+    thread::spawn(move || {
+        let mut child = std::process::Command::new("bash");
+        child.arg("-c").arg(&cmd);
+        if let Some(ref dir) = cwd {
+            child.current_dir(dir);
+        }
+        let result = child.output().ok().and_then(|o| {
+            if o.status.success() {
+                String::from_utf8(o.stdout).ok()
+            } else {
+                None
+            }
+        });
+        let _ = tx.send(result);
+    });
+
+    rx.recv_timeout(Duration::from_secs(3))
+        .ok()
+        .flatten()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
 }
 
 // ── frontmatter / cron 解析 ─────────────────────────────────────────

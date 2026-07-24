@@ -24,8 +24,6 @@ export PATH := /usr/bin:/bin:/usr/sbin:/sbin:/Library/Developer/CommandLineTools
 
 ROOT := $(shell pwd)
 TAURI_DIR := $(ROOT)/src-tauri
-DMG := $(ROOT)/target/release/bundle/dmg/OneCode Desktop_0.1.0_aarch64.dmg
-
 .PHONY: install-pkgs build release install dev test clean check static fmt fmt-check clippy help
 
 help:
@@ -75,8 +73,11 @@ release: static
 install: release
 	@echo ">>> 安装到 /Applications..."
 	-hdiutil detach "/Volumes/OneCode Desktop" 2>/dev/null || true
-	hdiutil attach "$(DMG)"
-	cp -R "/Volumes/OneCode Desktop/OneCode Desktop.app" /Applications/
+	DMG="$$(ls -d "$(ROOT)/target/release/bundle/dmg/"*.dmg 2>/dev/null | head -1)"; \
+	if [ -z "$$DMG" ]; then echo "错误: 未找到 DMG 文件"; exit 1; fi; \
+	echo ">>> 挂载 $$DMG ..."; \
+	hdiutil attach "$$DMG"; \
+	cp -R "/Volumes/OneCode Desktop/OneCode Desktop.app" /Applications/; \
 	hdiutil detach "/Volumes/OneCode Desktop"
 	@echo ">>> 完成。可从启动台或 /Applications 打开 OneCode Desktop"
 

@@ -1,16 +1,16 @@
 # OneCode Desktop
 
-> 原生桌面客户端，一个窗口管理多个 AI 终端。以 Claude Code 为内核，让一人公司开发者在一个窗口内创建、切换、复用多个终端会话。
+> 一人公司的 AI 员工调度台。一个窗口同时跑 N 个 AI 员工，各司其职、永不掉线。
 
-OneCode Desktop 是 [OneCode](https://github.com/yiyan-yixing/onecode) 的桌面形态。Web 版跑在 Docker 容器里靠浏览器访问，多任务只能开多个浏览器标签——切标签丢现场、标签不持久、无法后台常驻。Desktop 用原生窗口解决：多终端 Tab、托盘常驻、会话配置持久化。
+OneCode Desktop 以 Claude Code / OpenCode / Codex 等为内核（多内核可切换），让一人公司开发者在一个原生窗口内创建、切换、复用多个 AI 终端会话——每个终端都是一个常驻的 AI 员工。Web 版跑在 Docker 容器里靠浏览器访问，多任务只能开多个浏览器标签——切标签丢现场、标签不持久、无法后台常驻。Desktop 用原生窗口解决：多终端 Tab、托盘常驻、会话配置持久化。
 
 ![OneCode Desktop Screenshot](docs/screenshot.png)
 
 ## 功能亮点
 
-- 🖥️ **多终端管理** — 一个窗口内创建、切换、关闭多个 Claude Code 终端
+- 🖥️ **多终端管理** — 一个窗口内创建、切换、关闭多个 AI 终端（Claude Code / OpenCode / Codex 等）
 - 📁 **项目面板** — 左侧项目卡片，一键切换或创建终端
-- 🔍 **探索面板** — 查看所有 Agent 和会话，点击 Agent 插入 `@id`，点击会话切换终端
+- 🗂️ **右侧面板** — 文件浏览 + agents 列表双 Tab，点击 Agent 插入 `@id`
 - 🔴 **实时状态** — 终端运行/退出/崩溃状态一目了然
 - 🏷️ **Agent @mention** — 输入 `@` 弹出 Agent 列表，快速调用 @dev、@architect 等
 - 💾 **会话持久化** — 终端配置自动保存，重启恢复

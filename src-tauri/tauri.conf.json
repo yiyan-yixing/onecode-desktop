@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "OneCode Desktop",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "identifier": "com.onecode.desktop",
   "build": {
     "frontendDist": "../src",
@@ -43,7 +43,7 @@
     "category": "DeveloperTool",
     "publisher": "YiYan YiXing",
     "copyright": "© 2025 YiYan YiXing. MIT License.",
-    "shortDescription": "Multi-kernel AI terminal manager",
-    "longDescription": "OneCode Desktop — manage multiple AI coding terminals (Claude Code, OpenCode, Codex, etc.) in one native window."
+    "shortDescription": "一人公司的 AI 员工调度台",
+    "longDescription": "OneCode Desktop — 一人公司的 AI 员工调度台。一个原生窗口同时跑多个 AI coding 终端（Claude Code / OpenCode / Codex 等，多内核可切换），各司其职、永不掉线。"
   }
 }

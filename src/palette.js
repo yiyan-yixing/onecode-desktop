@@ -32,6 +32,7 @@ export class PaletteController {
     this.overlay = document.getElementById('paletteOverlay');
     this.input = document.getElementById('paletteInput');
     this.results = document.getElementById('paletteResults');
+    this._openSettings = null; // callback for opening settings panel
 
     // Input
     this.input.addEventListener('input', () => this._render());
@@ -45,6 +46,11 @@ export class PaletteController {
 
   setAgentProvider(fn) {
     this.agentProvider = fn;
+  }
+
+  /** P1-4: set callback to open settings panel */
+  setOpenSettings(fn) {
+    this._openSettings = fn;
   }
 
   open() {
@@ -155,7 +161,7 @@ export class PaletteController {
     }
 
     if (terminals.length) {
-      html += '<div class="palette-group-label">Terminals</div>';
+      html += '<div class="palette-group-label">终端</div>';
       terminals.forEach((t, i) => {
         const dotClass = t.status === 'running' ? 'running' : t.status === 'crashed' ? 'crashed' : 'exited';
         const kbd = t.index < 9 ? `<span class="palette-item-kbd">⌘${t.index + 1}</span>` : '';
@@ -198,26 +204,26 @@ export class PaletteController {
     }
 
     // Actions
-    html += '<div class="palette-group-label">Actions</div>';
+    html += '<div class="palette-group-label">操作</div>';
 
     // New terminal
     html +=
       `<div class="palette-item" data-idx="${this._items.length}">` +
       `<span class="palette-item-icon" style="background:var(--id-emerald)">+</span>` +
-      `<span class="palette-item-label">New Terminal</span>` +
+      `<span class="palette-item-label">新建终端</span>` +
       `<span class="palette-item-kbd">⌘T</span></div>`;
     this._items.push({ action: () => this.tm.createTab() });
 
     // Settings
     html +=
       `<div class="palette-item" data-idx="${this._items.length}">` +
-      `<span class="palette-item-icon" style="background:var(--aurora-overcast)">⚙</span>` +
-      `<span class="palette-item-label">Preferences</span>` +
-      `<span class="palette-item-detail">type &gt; to edit</span></div>`;
-    this._items.push({ action: () => { this.input.value = '> '; this._render(); } });
+      `<span class="palette-item-icon" style="background:var(--stone)"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px"><circle cx="8" cy="8" r="2.5"/><path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.05 3.05l1.41 1.41M11.54 11.54l1.41 1.41M3.05 12.95l1.41-1.41M11.54 4.46l1.41-1.41"/></svg></span>` +
+      `<span class="palette-item-label">偏好设置</span>` +
+      `<span class="palette-item-detail">输入 &gt; 编辑</span></div>`;
+    this._items.push({ action: () => { this._openSettings?.(); } });
 
     // CC Status summary
-    html += '<div class="palette-group-label">Status</div>';
+    html += '<div class="palette-group-label">状态</div>';
     html += '<div class="palette-item" style="cursor:default;gap:6px">';
     html += '<span style="font-size:11px;color:var(--text-void)">Skills · Hooks · Plugins · Tasks</span>';
     html += '</div>';
@@ -248,7 +254,7 @@ export class PaletteController {
     });
 
     if (!filtered.length) {
-      html += '<div class="palette-item" style="cursor:default"><span class="palette-item-label" style="color:var(--text-void)">No agents configured</span></div>';
+      html += '<div class="palette-item" style="cursor:default"><span class="palette-item-label" style="color:var(--text-void)">未配置 agents</span></div>';
     }
 
     this.results.innerHTML = html;
@@ -256,11 +262,11 @@ export class PaletteController {
 
   _renderSettings(q) {
     const settings = [
-      { key: 'command', label: 'Default Command', getValue: () => 'claude' },
-      { key: 'args', label: 'Default Arguments', getValue: () => '--permission-mode bypassPermissions' },
-      { key: 'cwd', label: 'Working Directory', getValue: () => '~/.onecode/workspace' },
-      { key: 'max', label: 'Max Terminals', getValue: () => '10' },
-      { key: 'buffer', label: 'Buffer Size (MB)', getValue: () => '10' },
+      { key: 'command', label: '默认命令', getValue: () => 'claude' },
+      { key: 'args', label: '默认参数', getValue: () => '--permission-mode bypassPermissions' },
+      { key: 'cwd', label: '工作目录', getValue: () => '~/.onecode/workspace' },
+      { key: 'max', label: '最大终端数', getValue: () => '10' },
+      { key: 'buffer', label: '缓冲区大小 (MB)', getValue: () => '10' },
     ];
 
     // Try loading from config
@@ -278,12 +284,12 @@ export class PaletteController {
 
   _renderSettingsItems(settings, q) {
     const filtered = q ? settings.filter((s) => s.label.toLowerCase().includes(q)) : settings;
-    let html = '<div class="palette-group-label">Preferences</div>';
+    let html = '<div class="palette-group-label">偏好设置</div>';
 
     filtered.forEach((s, i) => {
       html +=
         `<div class="palette-item${i === 0 ? ' sel' : ''}" data-idx="${this._items.length}">` +
-        `<span class="palette-item-icon" style="background:var(--aurora-overcast)">⚙</span>` +
+        `<span class="palette-item-icon" style="background:var(--stone)"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px"><circle cx="8" cy="8" r="2.5"/><path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.05 3.05l1.41 1.41M11.54 11.54l1.41 1.41M3.05 12.95l1.41-1.41M11.54 4.46l1.41-1.41"/></svg></span>` +
         `<span class="palette-item-label">${esc(s.label)}</span>` +
         `<span class="palette-item-detail">${esc(s.getValue())}</span></div>`;
       this._items.push({ action: () => this._editSetting(s) });
@@ -296,12 +302,12 @@ export class PaletteController {
     // Replace the palette content with an inline input for this setting
     const current = setting.getValue();
     this.results.innerHTML =
-      `<div class="palette-group-label">Edit: ${esc(setting.label)}</div>` +
+      `<div class="palette-group-label">编辑：${esc(setting.label)}</div>` +
       `<div class="palette-item" style="padding:8px 20px">` +
       `<input class="palette-setting-input" id="settingInput" value="${esc(current)}">` +
       `</div>` +
       `<div class="palette-item" style="cursor:default;padding:4px 20px">` +
-      `<span style="font-size:11px;color:var(--text-void)">Enter to save · Escape to cancel</span></div>`;
+      `<span style="font-size:11px;color:var(--text-void)">Enter 保存 · Escape 取消</span></div>`;
 
     const input = document.getElementById('settingInput');
     input.focus();
@@ -359,7 +365,7 @@ export class PaletteController {
       if (feedbackTarget) {
         const origText = feedbackTarget.textContent;
         feedbackTarget.style.color = '#f87171';
-        feedbackTarget.textContent = origText + ' ✗';
+        feedbackTarget.innerHTML = origText + ' <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="width:10px;height:10px;vertical-align:-1px"><line x1="3" y1="3" x2="9" y2="9"/><line x1="9" y1="3" x2="3" y2="9"/></svg>';
         setTimeout(() => {
           feedbackTarget.style.color = '';
           feedbackTarget.textContent = origText;

@@ -46,47 +46,47 @@
       <!-- Terminal Panel (dark) -->
       <div class="term-panel">
         <div class="term-viewport" id="termViewport"></div>
-        <!-- Empty state -->
-        <div class="term-empty" id="termEmpty">
+        <!-- Empty state: 初始加上 .on 类，避免启动时只有深色背景 -->
+        <div class="term-empty on" id="termEmpty">
           <div class="empty-orb" id="emptyOrb">
             <span class="empty-orb-icon">{ }</span>
           </div>
-          <div class="empty-title">OneCode</div>
-          <div class="empty-subtitle">AI-native development environment</div>
-          <div class="empty-kbd">
-            <kbd>⌘K</kbd> <span>to begin</span>
+          <div class="empty-title">一人公司的 AI 员工调度台</div>
+          <div class="empty-subtitle">一个窗口同时跑 N 个 AI 员工，各司其职、永不掉线。</div>
+          <div class="empty-actions">
+            <button class="empty-btn primary" id="emptyNewTerm">新建终端</button>
+            <button class="empty-btn" id="emptyPalette">⌘K 命令面板</button>
           </div>
+          <div class="empty-recent" id="emptyRecent"></div>
         </div>
       </div>
 
       <!-- File Panel (warm, right) -->
       <aside class="sidebar sidebar-right collapsed" id="filePanel">
-        <!-- Tab Bar: [ file | agents ] -->
         <div class="fe-tabs">
-          <button class="fe-tab active" data-tab="file">file</button>
-          <button class="fe-tab" data-tab="agents">agents</button>
+          <button class="fe-tab active" data-tab="file">文件</button>
         </div>
         <!-- File Tab Content -->
         <div class="fe-tab-content active" id="feTabFile"></div>
-        <!-- Agents Tab Content -->
-        <div class="fe-tab-content" id="feTabAgents"></div>
       </aside>
     </div>
 
-    <!-- Status Bar -->
+    <!-- Status Bar — 状态点 + 计数 + 健康告警 + CC 徽章；快捷键迁移至菜单栏 -->
     <footer class="statusbar" id="ribbon">
       <div class="statusbar-item">
         <span class="statusbar-dot" id="ribbonDot"></span>
-        <span id="ribbonStatus">Ready</span>
+        <span id="ribbonStatus">就绪</span>
       </div>
       <span class="ribbon-warn" id="healthWarn"></span>
       <div class="statusbar-item" id="ribbonCount">0</div>
+      <span class="ribbon-backend" id="ribbonBackend">
+        <span class="ribbon-backend-dot" id="ribbonBackendDot"></span>
+        <span id="ribbonBackendLabel">CC</span>
+        <span class="ribbon-model" id="ribbonModelLabel"></span>
+      </span>
+      <span class="ribbon-sl-text" id="ribbonStatusLine"></span>
       <div class="ribbon-badges" id="ribbonBadges"></div>
       <div class="statusbar-spacer"></div>
-      <span class="statusbar-kbd">⌘B</span> <span style="margin-right:6px">Sidebar</span>
-      <span class="statusbar-kbd">⇧⌘T</span> <span style="margin-right:6px">New in Project</span>
-      <span class="statusbar-kbd">⌘W</span> <span style="margin-right:6px">Close</span>
-      <span class="statusbar-kbd">⌘1-9</span> <span>Switch</span>
     </footer>
   </div>
 
@@ -94,11 +94,11 @@
   <div class="palette-overlay" id="paletteOverlay">
     <div class="palette" id="palette">
       <div class="palette-search">
-        <input type="text" class="palette-input" id="paletteInput" placeholder="type a command or search…" autocomplete="off" spellcheck="false">
+        <input type="text" class="palette-input" id="paletteInput" placeholder="输入命令或搜索…" autocomplete="off" spellcheck="false">
       </div>
       <div class="palette-results" id="paletteResults"></div>
       <div class="palette-footer">
-        <span class="palette-hint"><kbd>↑↓</kbd> navigate  <kbd>↵</kbd> select  <kbd>⎋</kbd> close</span>
+        <span class="palette-hint"><kbd>↑↓</kbd> 切换  <kbd>↵</kbd> 选择  <kbd>⎋</kbd> 关闭</span>
       </div>
     </div>
   </div>

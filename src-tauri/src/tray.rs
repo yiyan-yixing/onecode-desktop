@@ -13,8 +13,6 @@ use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{App, AppHandle, Emitter, Manager, WindowEvent};
 
-use crate::pty::MultiPtyManager;
-
 /// 初始化系统托盘 + 窗口关闭拦截。
 pub fn setup(app: &App) -> tauri::Result<()> {
     // ── 菜单项 ──
@@ -31,7 +29,7 @@ pub fn setup(app: &App) -> tauri::Result<()> {
 
     // ── 托盘图标（用应用默认图标） ──
     let mut builder = TrayIconBuilder::with_id("main-tray")
-        .tooltip("OneCode Desktop")
+        .tooltip("OneCode Desktop · 一人公司的 AI 员工调度台")
         .icon_as_template(true)
         .menu(&menu)
         .show_menu_on_left_click(false)
@@ -65,21 +63,7 @@ fn on_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
             let _ = app.emit("tray:new-terminal", ()); // 前端 → tabManager.createTab()
         }
         "tray:show" => show_window(app),
-        "tray:quit" => {
-            // 通知前端关闭所有终端 tab + 保存会话
-            let _ = app.emit("app:before-quit", ());
-            // 给前端时间完成 closeAllTabs()（每个 tab 需要 ptyKill IPC + dispose）
-            // 不等的话前端 closeTab 还没跑完进程就退了，xterm 和 DOM 都不会清理
-            std::thread::sleep(std::time::Duration::from_millis(300));
-            // 释放阻止休眠的 assertion
-            crate::keep_awake::allow_display_sleep();
-            crate::keep_awake::allow_idle_sleep();
-            // kill 所有 PTY（兜底：前端 closeTab 已 ptyKill，此处处理遗漏的）
-            if let Some(mgr) = app.try_state::<MultiPtyManager>() {
-                mgr.kill_all_blocking();
-            }
-            app.exit(0);
-        }
+        "tray:quit" => crate::menu::quit_app(app),
         _ => {}
     }
 }

@@ -34,8 +34,11 @@ export class OrbitalController {
     this._ctxMenu = null;
     this._projects = [];
     this._projectListView = null;
+    this._agentsListView = null;
     this._projectsLoaded = false;
     this._backends = []; // cached list from list_backends
+    this._activeLeftTab = 'projects'; // 'projects' | 'agents' (P1-6)
+    this.onProjectsChanged = null; // 项目列表加载完成回调（空状态最近项目卡片用）
   }
 
   /** 诊断：dump #orbital 下所有 DOM 元素（调试用） */
@@ -43,11 +46,22 @@ export class OrbitalController {
     // 保留接口，生产环境不输出
   }
 
+  /** P1-6: 注入 agents 数据提供者（从 CcStatusView.onAgents 回调注入） */
+  setAgentProvider(fn) {
+    this.agentProvider = fn;
+  }
+
+  /** P1-6: 刷新 agents 列表 */
+  refreshAgents() {
+    if (this._activeLeftTab !== 'agents') return;
+    this._renderAgentsList();
+  }
+
   init(tm) {
     this.tm = tm;
     this.el = document.getElementById('orbital');
 
-    this._renderTabContent();
+    this._renderTabbedLayout();
 
     // Context menu
     this.el.addEventListener('contextmenu', (e) => {
@@ -81,19 +95,29 @@ export class OrbitalController {
     }
   }
 
-  // ── Tab Content ──
+  // ── P1-6: Tabbed Layout (Projects / Agents) ──
 
-  _renderTabContent() {
+  _renderTabbedLayout() {
+    // Tab bar (same style as right panel)
+    const tabBar = document.createElement('div');
+    tabBar.className = 'orbi-tabs';
+    tabBar.innerHTML =
+      `<button class="orbi-tab active" data-orbi-tab="projects">项目</button>` +
+      `<button class="orbi-tab" data-orbi-tab="agents">agents</button>`;
+    this.el.appendChild(tabBar);
+
+    // ── Projects Tab Content ──
     const projectPanel = document.createElement('div');
-    projectPanel.className = 'orbital-tab-content';
+    projectPanel.className = 'orbital-tab-content active';
+    projectPanel.dataset.orbiContent = 'projects';
 
     const projectBtn = document.createElement('button');
     projectBtn.className = 'orbital-action-btn';
     projectBtn.innerHTML =
-      `<div class="project-icon" style="background:var(--sand);color:var(--tx-warm3)">` +
-      `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="width:12px;height:12px"><line x1="8" y1="3" x2="8" y2="13"/><line x1="3" y1="8" x2="13" y2="8"/></svg>` +
+      `<div class="project-icon" style="background:var(--sand);color:var(--tx-warm3);font-size:0">` +
+      `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px"><rect x="2" y="3" width="12" height="10" rx="2"/><line x1="8" y1="6" x2="8" y2="10"/><line x1="6" y1="8" x2="10" y2="8"/></svg>` +
       `</div>` +
-      `<div class="project-info"><div class="project-name">New Project</div></div>`;
+      `<div class="project-info"><div class="project-name">新建项目</div></div>`;
     projectBtn.addEventListener('click', () => this._newProject());
     projectPanel.appendChild(projectBtn);
 
@@ -104,7 +128,172 @@ export class OrbitalController {
     this.el.appendChild(projectPanel);
     this._projectListView = projectPanel;
 
+    // ── Agents Tab Content ──
+    const agentsPanel = document.createElement('div');
+    agentsPanel.className = 'orbital-tab-content';
+    agentsPanel.dataset.orbiContent = 'agents';
+
+    const agentsList = document.createElement('div');
+    agentsList.className = 'al-list';
+    const empty = document.createElement('div');
+    empty.className = 'al-empty';
+    empty.textContent = '暂无 agents';
+    agentsList.appendChild(empty);
+    agentsPanel.appendChild(agentsList);
+
+    this.el.appendChild(agentsPanel);
+    this._agentsListView = agentsList;
+
+    // ── Tab switching ──
+    tabBar.addEventListener('click', (e) => {
+      const tab = e.target.closest('.orbi-tab');
+      if (!tab) return;
+      const tabId = tab.dataset.orbiTab;
+      if (tabId === this._activeLeftTab) return;
+      this._activeLeftTab = tabId;
+
+      // Update tab button state
+      tabBar.querySelectorAll('.orbi-tab').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.orbiTab === tabId);
+      });
+
+      // Show/hide content panels
+      this.el.querySelectorAll('.orbital-tab-content').forEach(panel => {
+        panel.classList.toggle('active', panel.dataset.orbiContent === tabId);
+      });
+
+      // Refresh agents list when switching to agents tab
+      if (tabId === 'agents') {
+        this._renderAgentsList();
+      }
+    });
+
     this._loadProjects();
+  }
+
+  // ── P1-6: Agents List Rendering ──
+
+  _renderAgentsList() {
+    const list = this._agentsListView;
+    if (!list) return;
+
+    const provider = this.agentProvider || (this.tm && this.tm.agentProvider);
+    const agents = provider ? provider() : [];
+    if (!Array.isArray(agents)) return;
+
+    list.innerHTML = '';
+
+    const hasActiveTerminal = this.tm && this.tm.activeId
+      && this.tm.tabs.get(this.tm.activeId)
+      && !this.tm.tabs.get(this.tm.activeId).isError;
+
+    if (agents.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'al-empty';
+      empty.textContent = '暂无 agents';
+      list.appendChild(empty);
+      return;
+    }
+
+    // Sort: project scope first, then global
+    const sorted = [...agents].sort((a, b) => {
+      if (a.scope === b.scope) return a.name.localeCompare(b.name);
+      return a.scope === 'project' ? -1 : 1;
+    });
+
+    sorted.forEach((agent) => {
+      const item = document.createElement('div');
+      item.className = 'al-item';
+      if (!hasActiveTerminal) item.classList.add('al-disabled');
+      item.dataset.scope = agent.scope;
+      item.dataset.id = agent.id;
+      item.setAttribute('role', 'button');
+      item.setAttribute('tabindex', '0');
+
+      const color = (agent.color && /^#[0-9a-fA-F]{6}$/.test(agent.color)) ? agent.color : this._agentColor(agent.id);
+      const iconText = agent.icon || (agent.name && agent.name.charAt(0).toUpperCase()) || '?';
+
+      const scopeStyle = agent.scope === 'project'
+        ? { bg: 'rgba(5,150,105,.08)', color: 'var(--em)', border: 'rgba(5,150,105,.15)' }
+        : { bg: 'rgba(167,139,250,.08)', color: 'var(--lavender)', border: 'rgba(167,139,250,.15)' };
+
+      item.innerHTML =
+        `<span class="al-icon" style="background:${color}18;color:${color};border:1px solid ${color}30">${esc(iconText)}</span>` +
+        `<div class="al-info">` +
+          `<div class="al-name-row">` +
+            `<span class="al-name">${esc(agent.name)}</span>` +
+          `</div>` +
+          (agent.description
+            ? `<div class="al-desc">${esc(agent.description)}</div>`
+            : '') +
+        `</div>` +
+        `<span class="al-scope" style="background:${scopeStyle.bg};color:${scopeStyle.color};border:1px solid ${scopeStyle.border}">${esc(agent.scope)}</span>`;
+
+      // Click → @mention insert into active terminal
+      item.addEventListener('click', () => this._agentClick(agent.id, item));
+      item.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          this._agentClick(agent.id, item);
+        }
+      });
+
+      list.appendChild(item);
+    });
+  }
+
+  /** Agent identity color (stable hash) */
+  _agentColor(id) {
+    const COLORS = ['#10B981', '#22D3EE', '#A78BFA', '#F472B6',
+      '#F7C948', '#7DD3FC', '#FB923C', '#84CC16', '#D946EF', '#2DD4BF'];
+    let hash = 0;
+    for (let i = 0; i < id.length; i++) {
+      hash = ((hash << 5) - hash + id.charCodeAt(i)) | 0;
+    }
+    return COLORS[Math.abs(hash) % COLORS.length];
+  }
+
+  /** Agent click → @mention insert */
+  _agentClick(agentId, itemEl) {
+    if (!this.tm || !this.tm.activeId) {
+      this._showNoTerminalToast();
+      return;
+    }
+    const activeId = this.tm.activeId;
+    const st = this.tm.tabs.get(activeId);
+    if (!st || st.isError) {
+      this._showNoTerminalToast();
+      return;
+    }
+
+    // Write @agent-id to active terminal
+    if (st.mention && typeof st.mention.sendInput === 'function') {
+      if (st.mention.active) st.mention.hide();
+      try { st.mention.sendInput(`@${agentId} `); } catch (e) { /* fallback below */ }
+    } else {
+      ipc.ptyWrite(activeId, `@${agentId} `).catch(() => {});
+    }
+
+    // Visual feedback
+    itemEl.classList.add('al-mention-flash');
+    setTimeout(() => itemEl.classList.remove('al-mention-flash'), 400);
+    try { st.term.focus(); } catch (e) { /* silent */ }
+  }
+
+  /** Toast when no active terminal */
+  _showNoTerminalToast() {
+    const panel = this.el.querySelector('.orbital-tab-content.active[data-orbi-content="agents"]');
+    if (!panel) return;
+    let toast = panel.querySelector('.al-toast');
+    if (!toast) {
+      toast = document.createElement('div');
+      toast.className = 'al-toast';
+      toast.innerHTML = '<span class="al-toast-msg">请先创建一个终端</span>';
+      panel.appendChild(toast);
+    }
+    toast.classList.add('on');
+    if (this._toastTimer) clearTimeout(this._toastTimer);
+    this._toastTimer = setTimeout(() => toast.classList.remove('on'), 2000);
   }
 
   // ── Project List ──
@@ -137,6 +326,8 @@ export class OrbitalController {
       this._projects = [];
     }
     this._renderProjectList();
+    // 通知空状态「最近项目」卡片刷新
+    if (this.onProjectsChanged) this.onProjectsChanged();
   }
 
   _renderProjectList() {
@@ -319,7 +510,7 @@ export class OrbitalController {
     const sortedBackends = [...installed, ...uninstalled];
 
     const backendOptionsHtml = sortedBackends.map(b => {
-      const icon = b.installed ? '✓' : '✗';
+      const icon = b.installed ? '●' : '○';
       const cls = b.installed ? '' : ' disabled';
       const selected = b.id === 'claude-code' ? ' selected' : '';
       return `<option value="${esc(b.id)}"${cls}${selected}>${icon} ${esc(b.display_name)}</option>`;
@@ -617,29 +808,33 @@ export class OrbitalController {
     menu.style.top = e.clientY + 'px';
 
     const items = [
-      { label: '重命名', action: () => { const orb = this.el.querySelector(`.orb[data-id="${id}"]`); const l = orb?.querySelector('.orb-label'); if (l) this.startRename(id, l); } },
-      { label: '重启', action: () => this.tm.restartTab(id) },
+      { label: '重命名', icon: 'rename', action: () => { const orb = this.el.querySelector(`.orb[data-id="${id}"]`); const l = orb?.querySelector('.orb-label'); if (l) this.startRename(id, l); } },
+      { label: '重启', icon: 'restart', action: () => this.tm.restartTab(id) },
     ];
     // "复制对话" — 所有终端都属项目，皆可复制
-    items.push({ label: '复制对话', action: () => this.tm.createTab({ label: st.label + '-2', cmd: st.cmd, args: st.args, cwd: st.cwd, projectId: st.projectId, backend: st.backend }) });
+    items.push({ label: '复制对话', icon: 'copy', action: () => this.tm.createTab({ label: st.label + '-2', cmd: st.cmd, args: st.args, cwd: st.cwd, projectId: st.projectId, backend: st.backend }) });
     items.push(
       { sep: true },
-      { label: '复制路径', action: () => { if (st.cwd) navigator.clipboard.writeText(st.cwd); } },
+      { label: '复制路径', icon: 'link', action: () => { if (st.cwd) navigator.clipboard.writeText(st.cwd); } },
       { sep: true },
-      { label: '关闭', cls: 'danger', action: () => this.tm.closeTab(id) },
+      { label: '关闭', icon: 'close', cls: 'danger', action: () => this.tm.closeTab(id) },
     );
 
     items.forEach((it) => {
       if (it.sep) {
-        // 用 createElement 追加，不用 innerHTML +=
-        // innerHTML += 会序列化再反序列化整个 DOM，销毁之前绑定的 click 监听器
         const sep = document.createElement('div');
         sep.className = 'ctx-menu-sep';
         menu.appendChild(sep);
       } else {
         const el = document.createElement('div');
         el.className = 'ctx-menu-item' + (it.cls ? ' ' + it.cls : '');
-        el.textContent = it.label;
+        const iconSpan = document.createElement('span');
+        iconSpan.className = 'ctx-menu-icon';
+        iconSpan.innerHTML = CONTEXT_ICONS[it.icon] || '';
+        el.appendChild(iconSpan);
+        const labelSpan = document.createElement('span');
+        labelSpan.textContent = it.label;
+        el.appendChild(labelSpan);
         el.addEventListener('click', () => { it.action(); this._dismissCtxMenu(); });
         menu.appendChild(el);
       }
@@ -689,7 +884,7 @@ export class OrbitalController {
 
     // 关闭 — 仅在有终端时显示；>=3 时弹确认
     if (termIds.length > 0) {
-      items.push({ label: `关闭（${termIds.length} 个终端）`, cls: 'danger', action: async () => {
+      items.push({ label: `关闭（${termIds.length} 个终端）`, icon: 'close', cls: 'danger', action: async () => {
         if (termIds.length >= 3 && !await this._confirmDialog(`确定关闭 ${termIds.length} 个终端？`)) return;
         for (const tid of [...termIds]) {
           await this.tm.closeTab(tid);
@@ -699,7 +894,7 @@ export class OrbitalController {
 
     // 删除项目 — 始终可用
     if (items.length > 0) items.push({ sep: true });
-    items.push({ label: '删除项目', cls: 'danger', action: async () => {
+    items.push({ label: '删除项目', icon: 'delete', cls: 'danger', action: async () => {
       let activeCount = 0;
       if (this.tm && this.tm.tabs) {
         this.tm.tabs.forEach((st) => {
@@ -729,15 +924,19 @@ export class OrbitalController {
 
     items.forEach((it) => {
       if (it.sep) {
-        // 用 createElement 追加，不用 innerHTML +=
-        // innerHTML += 会序列化再反序列化整个 DOM，销毁之前绑定的 click 监听器
         const sep = document.createElement('div');
         sep.className = 'ctx-menu-sep';
         menu.appendChild(sep);
       } else {
         const el = document.createElement('div');
         el.className = 'ctx-menu-item' + (it.cls ? ' ' + it.cls : '');
-        el.textContent = it.label;
+        const iconSpan = document.createElement('span');
+        iconSpan.className = 'ctx-menu-icon';
+        iconSpan.innerHTML = CONTEXT_ICONS[it.icon] || '';
+        el.appendChild(iconSpan);
+        const labelSpan = document.createElement('span');
+        labelSpan.textContent = it.label;
+        el.appendChild(labelSpan);
         el.addEventListener('click', () => { it.action(); this._dismissCtxMenu(); });
         menu.appendChild(el);
       }
@@ -771,7 +970,7 @@ export class OrbitalController {
     menu.style.top = e.clientY + 'px';
 
     const items = [
-      { label: '删除项目', cls: 'danger', action: async () => {
+      { label: '删除项目', icon: 'delete', cls: 'danger', action: async () => {
         // Count running terminals for this project
         let activeCount = 0;
         const projId = proj.id || proj.name;
@@ -891,6 +1090,17 @@ export class OrbitalController {
     });
   }
 }
+
+// ── 上下文菜单 SVG 图标集 ──
+
+const CONTEXT_ICONS = {
+  rename: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" style="width:13px;height:13px"><path d="M11.5 2.5a1.41 1.41 0 012 2L5 13l-3 1 1-3 8.5-8.5z"/></svg>',
+  restart: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" style="width:13px;height:13px"><polyline points="1 4 1 10 7 10"/><path d="M3.51 12a6 6 0 109.49-3.96"/></svg>',
+  copy: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" style="width:13px;height:13px"><path d="M5 2h6a1 1 0 011 1v1a1 1 0 01-1 1H5a1 1 0 01-1-1V3a1 1 0 011-1z"/><rect x="3" y="4" width="10" height="10" rx="1.5"/></svg>',
+  link: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" style="width:13px;height:13px"><path d="M6 11l-2.5-2.5a2 2 0 010-2.83l1-1a2 2 0 012.83 0L10 7"/><path d="M10 5l2.5 2.5a2 2 0 010 2.83l-1 1a2 2 0 01-2.83 0L6 9"/></svg>',
+  close: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" style="width:13px;height:13px"><line x1="4" y1="4" x2="12" y2="12"/><line x1="12" y1="4" x2="4" y2="12"/></svg>',
+  delete: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" style="width:13px;height:13px"><polyline points="3 4 4 14 12 14 13 4"/><line x1="1" y1="4" x2="15" y2="4"/><line x1="6" y1="6" x2="6" y2="12"/><line x1="10" y1="6" x2="10" y2="12"/></svg>',
+};
 
 let _cachedHome = null;
 

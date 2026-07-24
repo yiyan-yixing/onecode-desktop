@@ -132,6 +132,12 @@ export class TabManager {
     let _writeBatch = [];
     let _writeRaf = null;
     const onData = (bytes) => {
+      // 【诊断】首次 PTY 数据输出时写控制台
+      if (!window.__ptyFirstDataLogged) {
+        window.__ptyFirstDataLogged = true;
+        const rawStr = typeof bytes === 'string' ? bytes : new TextDecoder().decode(bytes);
+        console.log('[pty-first-data]', JSON.stringify(rawStr.slice(0, 500)));
+      }
       if (this.activeId === id) {
         _writeBatch.push(bytes);
         const byteLen = bytes.length || bytes.byteLength || 0;
@@ -368,6 +374,7 @@ export class TabManager {
     this.switchTo(id);
     this._scheduleSave();
     this._notifyChange();
+
     return id;
   }
 

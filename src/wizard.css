@@ -1,6 +1,6 @@
 /* ═══════════════════════════════════════════════════════
-   OneCode Desktop · Setup Wizard
-   Warm dark overlay, 3-step guided experience
+   OneCode Desktop · Setup Wizard — Apple-grade onboarding
+   Warm deep overlay, guided 3-step experience with polish
    ═══════════════════════════════════════════════════════ */
 
 /* ── Overlay ── */
@@ -17,6 +17,17 @@
   transition: opacity 400ms var(--ease-out);
 }
 
+/* Subtle fiber texture over backdrop */
+.wizard-overlay::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 70% 40% at 20% 30%, rgba(16,185,129,.04) 0%, transparent 60%),
+    radial-gradient(ellipse 50% 60% at 80% 70%, rgba(167,139,250,.03) 0%, transparent 50%);
+  pointer-events: none;
+}
+
 /* ── Container ── */
 
 .wizard-container {
@@ -29,7 +40,10 @@
   background: var(--deep);
   border: 1px solid var(--raised);
   border-radius: 20px;
-  box-shadow: 0 0 80px rgba(0,0,0,.5), 0 0 0 1px rgba(255,255,255,.04);
+  box-shadow:
+    0 0 80px rgba(0,0,0,.5),
+    0 0 0 1px rgba(255,255,255,.04),
+    0 8px 32px rgba(0,0,0,.3);
   overflow: hidden;
   animation: wizard-in 600ms var(--ease-spring);
 }
@@ -53,6 +67,9 @@
   font-weight: 700;
   color: var(--em-bright);
   letter-spacing: -0.02em;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .wizard-stepper {
@@ -66,7 +83,7 @@
 .wizard-stepper .step {
   padding: 3px 8px;
   border-radius: 6px;
-  transition: all 150ms ease;
+  transition: all 200ms var(--ease-out);
 }
 
 .wizard-stepper .step.active {
@@ -124,11 +141,17 @@
 .wizard-btn-primary:hover {
   background: #047857;
   transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(5,150,105,.3);
+  box-shadow: 0 4px 16px rgba(5,150,105,.35);
 }
 
 .wizard-btn-primary:active {
-  transform: translateY(0);
+  transform: translateY(0) scale(0.98);
+}
+
+.wizard-btn-primary:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  pointer-events: none;
 }
 
 .wizard-btn-secondary {
@@ -140,13 +163,17 @@
   color: var(--tx2);
   font: 500 13px/1 var(--font-ui);
   cursor: pointer;
-  transition: all 150ms ease;
+  transition: all 150ms var(--ease-out);
 }
 
 .wizard-btn-secondary:hover {
   background: var(--raised);
   color: var(--tx);
   border-color: var(--highlight);
+}
+
+.wizard-btn-secondary:active {
+  transform: scale(0.98);
 }
 
 /* ── Welcome ── */
@@ -161,14 +188,25 @@
 }
 
 .wizard-welcome-icon {
-  font-size: 40px;
+  width: 64px;
+  height: 64px;
+  border-radius: 16px;
+  background: var(--em-ghost);
+  display: flex;
+  align-items: center;
+  justify-content: center;
   color: var(--em-bright);
-  animation: wizard-icon-pulse 2s ease-in-out infinite;
+  animation: wizard-icon-pulse 2.5s ease-in-out infinite;
+}
+
+.wizard-welcome-icon svg {
+  width: 36px;
+  height: 36px;
 }
 
 @keyframes wizard-icon-pulse {
-  0%, 100% { opacity: 0.7; transform: scale(1); }
-  50%      { opacity: 1; transform: scale(1.08); }
+  0%, 100% { opacity: 0.8; transform: scale(1); box-shadow: 0 0 0 0 var(--em-glow); }
+  50%      { opacity: 1; transform: scale(1.05); box-shadow: 0 0 24px 4px var(--em-glow); }
 }
 
 .wizard-welcome h2 {
@@ -199,8 +237,9 @@
   height: 32px;
   border: 3px solid var(--elevated);
   border-top-color: var(--em-bright);
+  border-right-color: var(--em-ghost);
   border-radius: 50%;
-  animation: wizard-spin 0.8s linear infinite;
+  animation: wizard-spin 0.7s linear infinite;
 }
 
 @keyframes wizard-spin {
@@ -274,6 +313,11 @@
   flex-shrink: 0;
 }
 
+.wizard-dep-icon svg {
+  width: 15px;
+  height: 15px;
+}
+
 .wizard-dep.ok .wizard-dep-icon {
   background: var(--em-ghost);
   color: var(--em-bright);
@@ -327,15 +371,30 @@
   background: var(--surface);
   color: var(--tx2);
   cursor: pointer;
-  font-size: 14px;
   flex-shrink: 0;
-  transition: all 150ms ease;
+  transition: all 150ms var(--ease-out);
   align-self: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .wizard-copy-btn:hover {
   background: var(--raised);
   color: var(--tx);
+  border-color: var(--highlight);
+}
+
+.wizard-copy-btn:active {
+  transform: scale(0.92);
+}
+
+.wizard-copy-btn .wiz-copy-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
 }
 
 /* ── Config Form ── */
@@ -463,17 +522,20 @@
   border-radius: 50%;
   background: var(--em-ghost);
   color: var(--em-bright);
-  font-size: 28px;
-  font-weight: 700;
   display: flex;
   align-items: center;
   justify-content: center;
   animation: wizard-done-in 500ms var(--ease-spring);
 }
 
+.wizard-done-icon svg {
+  width: 30px;
+  height: 30px;
+}
+
 @keyframes wizard-done-in {
-  from { transform: scale(0); opacity: 0; }
-  to   { transform: scale(1); opacity: 1; }
+  from { transform: scale(0) rotate(-30deg); opacity: 0; }
+  to   { transform: scale(1) rotate(0deg); opacity: 1; }
 }
 
 .wizard-done h2 {
@@ -508,16 +570,25 @@
 }
 
 .wizard-error-icon {
-  width: 48px;
-  height: 48px;
+  width: 56px;
+  height: 56px;
   border-radius: 50%;
   background: rgba(239,68,68,.12);
   color: #ef4444;
-  font-size: 24px;
-  font-weight: 700;
   display: flex;
   align-items: center;
   justify-content: center;
+  animation: wizard-error-in 400ms var(--ease-spring);
+}
+
+.wizard-error-icon svg {
+  width: 28px;
+  height: 28px;
+}
+
+@keyframes wizard-error-in {
+  from { transform: scale(0) rotate(30deg); opacity: 0; }
+  to   { transform: scale(1) rotate(0deg); opacity: 1; }
 }
 
 .wizard-error h2 {

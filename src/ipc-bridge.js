@@ -224,6 +224,21 @@ export async function loadConfig() {
   return safeInvoke('load_config');
 }
 
+/** 获取 OneCode 配置文件路径（供 agent 直接读写） */
+export async function getConfigPath() {
+  return safeInvoke('get_config_path');
+}
+
+/** 获取配置字段 schema（名称/类型/描述/默认值，供 agent 参考） */
+export async function getConfigSchema() {
+  return safeInvoke('get_config_schema');
+}
+
+/** 监听配置文件外部变更（agent 直接修改后被热加载） */
+export function onConfigChanged(callback) {
+  return listen('config-changed', () => callback());
+}
+
 // ── 项目管理 ──────────────────────────────────────────────────────────
 
 /** 保存项目元数据到 ~/.onecode/projects/<name>.json */
@@ -251,6 +266,11 @@ export function onTrayNewTerminal(callback) {
 /** 应用即将退出（托盘「退出」触发）——前端在此做最终会话保存。 */
 export function onAppBeforeQuit(callback) {
   return listen('app:before-quit', () => callback());
+}
+
+/** 应用菜单栏事件（Rust menu.rs emit `menu:<id>`，P0-4）。 */
+export function onMenuEvent(id, callback) {
+  return listen(`menu:${id}`, () => callback());
 }
 
 // ── 系统信息 ──────────────────────────────────────────────────────────

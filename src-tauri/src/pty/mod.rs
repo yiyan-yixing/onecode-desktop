@@ -559,6 +559,16 @@ fn start_reader_batcher(
     let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(PTY_CHAN_CAPACITY);
 
     // reader 线程：阻塞读，把原始字节发到 mpsc
+    // 【诊断】捕获前 10KB PTY 数据到 ~/.onecode/pty-dump.txt（字符串提取），用于排查终端异常输出
+    // 每次新 PTY 创建时覆盖写入，包含前 10KB 的可读文本（去除 ANSI 控制序列）
+    let diag_path = std::env::var("HOME")
+        .map(|h| std::path::PathBuf::from(h).join(".onecode/pty-dump.txt"))
+        .unwrap_or_else(|_| std::path::PathBuf::from("/tmp/pty-dump.txt"));
+    // 重置诊断文件
+    let _ = std::fs::write(&diag_path, b"");
+    let diag_limit: usize = 10 * 1024;
+    let diag_total = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
     std::thread::spawn(move || {
         let mut reader = reader;
         let mut buf = [0u8; 4096];
@@ -566,8 +576,21 @@ fn start_reader_batcher(
             match reader.read(&mut buf) {
                 Ok(0) => break,
                 Ok(n) => {
+                    // 诊断：累计写入文件（上限 10KB，ANSI 控制序列会被保留便于 hex 分析）
+                    let prev = diag_total.fetch_add(n, std::sync::atomic::Ordering::Relaxed);
+                    if prev < diag_limit {
+                        let write_len = (n.min(diag_limit - prev)).min(n);
+                        let _ = std::fs::OpenOptions::new()
+                            .create(true).append(true).open(&diag_path)
+                            .and_then(|f| {
+                                use std::io::Write;
+                                let mut w = f;
+                                w.write_all(&buf[..write_len])
+                            });
+                    }
+
                     if tx.blocking_send(buf[..n].to_vec()).is_err() {
-                        break; // channel 关闭（batcher 退出）
+                        break;
                     }
                 }
                 Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => continue,

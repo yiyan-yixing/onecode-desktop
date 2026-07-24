@@ -1,7 +1,7 @@
 {
   "name": "onecode-desktop",
-  "version": "0.1.0",
-  "description": "OneCode Desktop — 原生桌面客户端，一个窗口管理多个 AI 终端",
+  "version": "0.3.0",
+  "description": "OneCode Desktop — 一人公司的 AI 员工调度台",
   "private": true,
   "type": "module",
   "scripts": {

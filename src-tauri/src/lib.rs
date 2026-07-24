@@ -10,6 +10,7 @@ mod config;
 mod events;
 mod fs_explorer;
 mod keep_awake;
+mod menu;
 mod pty;
 mod session;
 mod tray;
@@ -85,6 +86,11 @@ pub fn run() {
                 log::warn!("[tray] setup failed (P1, non-fatal): {e}");
             }
 
+            // 原生应用菜单栏（承载快捷键可发现性，P0-4）
+            if let Err(e) = menu::setup(app) {
+                log::warn!("[menu] setup failed (P0, non-fatal): {e}");
+            }
+
             // 阻止系统空闲休眠（允许屏幕熄灭，合盖仍休眠）
             keep_awake::prevent_idle_sleep();
 
@@ -95,6 +101,12 @@ pub fn run() {
 
             // 健康检测后台循环
             pty::health::start_loop(app.handle().clone());
+
+            // 配置文件热加载（监控 agent 直接修改 ~/.onecode/desktop.json）
+            config::start_config_watcher(
+                app.state::<ConfigManager>().arc(),
+                app.handle().clone(),
+            );
 
             Ok(())
         })
@@ -121,6 +133,8 @@ pub fn run() {
             commands::list_projects,
             commands::delete_project,
             commands::get_home_dir,
+            commands::get_config_path,
+            commands::get_config_schema,
             fs_explorer::fs_list_dir,
             fs_explorer::fs_read_file,
             wizard::check_environment,
@@ -129,6 +143,7 @@ pub fn run() {
             backend::list_backends,
             commands::debug_log,
         ])
+        .on_menu_event(crate::menu::on_menu_event)
         .run(tauri::generate_context!())
         .expect("failed to run OneCode Desktop");
 }

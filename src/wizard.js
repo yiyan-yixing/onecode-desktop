@@ -63,7 +63,8 @@ export async function initWizard() {
   if (!firstRun) return;
 
   return new Promise((resolve) => {
-    resolveWizard = resolve;
+    // resolve 返回配置信息（backend/projectDir），供 main.js 自动创建终端
+    resolveWizard = (result) => resolve(result);
     mountOverlay();
     transition(S.WELCOME);
   });
@@ -154,10 +155,16 @@ function render(payload) {
       break;
     case S.DONE:
       renderDone(body, footer);
+      // 组装返回数据，供 main.js 自动创建终端
+      const wizardResult = {
+        backend: formData.backend,
+        baseUrl: formData.baseUrl,
+        model: formData.model,
+      };
       setTimeout(() => {
-        if (resolveWizard) resolveWizard();
+        if (resolveWizard) resolveWizard(wizardResult);
         destroyWizard();
-      }, 1500);
+      }, 1800);
       break;
     case S.ERROR:
       renderError(body, footer, payload);
@@ -170,9 +177,9 @@ function render(payload) {
 function renderWelcome(body, footer) {
   body.innerHTML = `
     <div class="wizard-welcome">
-      <div class="wizard-welcome-icon">✦</div>
-      <h2>Setting up OneCode</h2>
-      <p>Checking your environment…</p>
+      <div class="wizard-welcome-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="width:36px;height:36px"><path d="M12 2l2.4 7.2L22 12l-7.6 2.8L12 22l-2.4-7.2L2 12l7.6-2.8L12 2z"/><circle cx="12" cy="12" r="2" fill="currentColor" stroke="none"/></svg></div>
+      <h2>配置 OneCode</h2>
+      <p>正在检测环境…</p>
     </div>
   `;
   footer.innerHTML = '';
@@ -182,7 +189,7 @@ function renderChecking(body, footer) {
   body.innerHTML = `
     <div class="wizard-checking">
       <div class="wizard-spinner"></div>
-      <p>Detecting dependencies…</p>
+      <p>正在检测依赖…</p>
     </div>
   `;
   footer.innerHTML = '';
@@ -232,7 +239,9 @@ function renderEnvResult(body, footer) {
         ${backends.map(b => `
           <div class="wizard-dep ${b.installed ? 'ok' : 'fail'}">
             <div class="wizard-dep-icon">
-              ${b.installed ? '✓' : '✗'}
+              ${b.installed
+                ? '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px"><polyline points="4 8 7 11 12 4"/></svg>'
+                : '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px"><line x1="4" y1="4" x2="12" y2="12"/><line x1="12" y1="4" x2="4" y2="12"/></svg>'}
             </div>
             <div class="wizard-dep-info">
               <div class="wizard-dep-name">${escapeHtml(b.display_name)}</div>
@@ -240,7 +249,7 @@ function renderEnvResult(body, footer) {
               ${!b.installed ? `<div class="wizard-dep-hint">${escapeHtml(b.install_hint)}</div>` : ''}
             </div>
             ${!b.installed ? `
-              <button class="wizard-copy-btn" data-hint="${escapeAttr(b.install_hint)}" title="复制安装命令">📋</button>
+              <button class="wizard-copy-btn" data-hint="${escapeAttr(b.install_hint)}" title="复制安装命令"><span class="wiz-copy-icon"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px"><path d="M5 2h6a1 1 0 011 1v1a1 1 0 01-1 1H5a1 1 0 01-1-1V3a1 1 0 011-1z"/><rect x="3" y="4" width="10" height="10" rx="1.5"/></svg></span></button>
             ` : ''}
           </div>
         `).join('')}
@@ -251,12 +260,16 @@ function renderEnvResult(body, footer) {
   body.innerHTML = `
     <div class="wizard-env">
       <h2>环境检测</h2>
-      <p class="wizard-env-subtitle">${allOk && installedBackends.length > 0 ? '✅ 所有依赖已就绪' : '部分依赖缺失，但不影响继续配置'}</p>
+      <p class="wizard-env-subtitle">${allOk && installedBackends.length > 0 ? '所有依赖已就绪' : '部分依赖缺失，但不影响继续配置'}</p>
       <div class="wizard-deps">
         ${deps.map(dep => `
           <div class="wizard-dep ${dep.found && dep.version_ok ? 'ok' : dep.found ? 'warn' : 'fail'}">
             <div class="wizard-dep-icon">
-              ${dep.found && dep.version_ok ? '✓' : dep.found ? '⚠' : '✗'}
+              ${dep.found && dep.version_ok
+                ? '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px"><polyline points="4 8 7 11 12 4"/></svg>'
+                : dep.found
+                  ? '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px"><path d="M8 1v7M8 13v.01"/></svg>'
+                  : '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px"><line x1="4" y1="4" x2="12" y2="12"/><line x1="12" y1="4" x2="4" y2="12"/></svg>'}
             </div>
             <div class="wizard-dep-info">
               <div class="wizard-dep-name">${depName(dep.name)}${dep.min_version ? ` (≥ ${dep.min_version})` : ''}</div>
@@ -264,7 +277,7 @@ function renderEnvResult(body, footer) {
               ${!dep.found || !dep.version_ok ? `<div class="wizard-dep-hint">${escapeHtml(dep.install_hint)}</div>` : ''}
             </div>
             ${!dep.found || !dep.version_ok ? `
-              <button class="wizard-copy-btn" data-hint="${escapeAttr(dep.install_hint)}" title="复制安装命令">📋</button>
+              <button class="wizard-copy-btn" data-hint="${escapeAttr(dep.install_hint)}" title="复制安装命令"><span class="wiz-copy-icon"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px"><path d="M5 2h6a1 1 0 011 1v1a1 1 0 01-1 1H5a1 1 0 01-1-1V3a1 1 0 011-1z"/><rect x="3" y="4" width="10" height="10" rx="1.5"/></svg></span></button>
             ` : ''}
           </div>
         `).join('')}
@@ -273,16 +286,21 @@ function renderEnvResult(body, footer) {
     </div>
   `;
 
-  // 复制按钮事件
+  // 复制按钮事件 — 使用 SVG 替代 emoji
   body.querySelectorAll('.wizard-copy-btn').forEach(btn => {
+    const iconWrap = btn.querySelector('.wiz-copy-icon');
     btn.addEventListener('click', () => {
       const hint = btn.dataset.hint;
       navigator.clipboard.writeText(hint).then(() => {
-        btn.textContent = '✓';
-        setTimeout(() => btn.textContent = '📋', 1500);
+        if (iconWrap) iconWrap.innerHTML = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px"><polyline points="4 8 7 11 12 4"/></svg>';
+        setTimeout(() => {
+          if (iconWrap) iconWrap.innerHTML = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px"><path d="M5 2h6a1 1 0 011 1v1a1 1 0 01-1 1H5a1 1 0 01-1-1V3a1 1 0 011-1z"/><rect x="3" y="4" width="10" height="10" rx="1.5"/></svg>';
+        }, 1500);
       }).catch(() => {
-        btn.textContent = '✗';
-        setTimeout(() => btn.textContent = '📋', 1500);
+        if (iconWrap) iconWrap.innerHTML = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px"><line x1="4" y1="4" x2="12" y2="12"/><line x1="12" y1="4" x2="4" y2="12"/></svg>';
+        setTimeout(() => {
+          if (iconWrap) iconWrap.innerHTML = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px"><path d="M5 2h6a1 1 0 011 1v1a1 1 0 01-1 1H5a1 1 0 01-1-1V3a1 1 0 011-1z"/><rect x="3" y="4" width="10" height="10" rx="1.5"/></svg>';
+        }, 1500);
       });
     });
   });
@@ -311,7 +329,7 @@ function renderConfigForm(body, footer) {
   let backendSelector = '';
   if (sortedBackends.length > 0) {
     const optionsHtml = sortedBackends.map(b => {
-      const icon = b.installed ? '✓' : '✗';
+      const icon = b.installed ? '●' : '○';
       const disabled = b.installed ? '' : ' disabled';
       const selected = b.id === formData.backend ? ' selected' : '';
       return `<option value="${escapeAttr(b.id)}"${disabled}${selected}>${icon} ${escapeHtml(b.display_name)}</option>`;
@@ -338,7 +356,7 @@ function renderConfigForm(body, footer) {
           <div class="wizard-input-row">
             <input type="password" id="wizApiKey" value="${escapeAttr(formData.apiKey)}"
                    placeholder="${escapeAttr(beConfig.apiKeyPlaceholder)}" autocomplete="off" spellcheck="false">
-            <button class="wizard-eye-btn" id="wizEyeBtn" title="显示/隐藏">👁</button>
+            <button class="wizard-eye-btn" id="wizEyeBtn" title="显示/隐藏"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px"><path d="M1 8s3-5 7-5 7 5 7 5-3 5-7 5-7-5-7-5z"/><circle cx="8" cy="8" r="2"/></svg></button>
           </div>
           <div class="wizard-field-error" id="wizApiKeyErr"></div>
         </div>
@@ -506,13 +524,13 @@ function renderDone(body, footer) {
 
   body.innerHTML = `
     <div class="wizard-done">
-      <div class="wizard-done-icon">✓</div>
+      <div class="wizard-done-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="width:28px;height:28px"><circle cx="12" cy="12" r="10"/><polyline points="7 13 10 16 17 8"/></svg></div>
       <h2>配置完成</h2>
-      <p>OneCode 已就绪，终端加载中…</p>
+      <p>OneCode 已就绪，正在为你启动第一个终端…</p>
       <div class="wizard-done-summary">
         <span>后端: ${escapeHtml(beDisplayName)}</span>
         <span>·</span>
-        <span>API: ${formData.baseUrl.includes('anthropic') ? 'Anthropic' : 'Custom'}</span>
+        <span>API: ${formData.baseUrl.includes('anthropic') ? 'Anthropic' : '自定义'}</span>
         <span>·</span>
         <span>Model: ${escapeHtml(formData.model.trim())}</span>
       </div>
@@ -526,7 +544,7 @@ function renderDone(body, footer) {
 function renderError(body, footer, err) {
   body.innerHTML = `
     <div class="wizard-error">
-      <div class="wizard-error-icon">✗</div>
+      <div class="wizard-error-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="width:28px;height:28px"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg></div>
       <h2>保存失败</h2>
       <p class="wizard-error-msg">${escapeHtml(err || '未知错误')}</p>
       <p class="wizard-error-hint">请检查 ~/.onecode/ 目录的写入权限</p>
