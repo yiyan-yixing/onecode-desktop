@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "OneCode Desktop",
+  "productName": "OneCode",
   "version": "0.3.0",
   "identifier": "com.onecode.desktop",
   "build": {
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "",
+        "title": "OneCode",
         "width": 1200,
         "height": 800,
         "minWidth": 800,
@@ -44,6 +44,6 @@
     "publisher": "YiYan YiXing",
     "copyright": "© 2025 YiYan YiXing. MIT License.",
     "shortDescription": "一人公司的 AI 员工调度台",
-    "longDescription": "OneCode Desktop — 一人公司的 AI 员工调度台。一个原生窗口同时跑多个 AI coding 终端（Claude Code / OpenCode / Codex 等，多内核可切换），各司其职、永不掉线。"
+    "longDescription": "OneCode — 一人公司的 AI 员工调度台。一个原生窗口同时跑多个 AI 编程终端（Claude Code / OpenCode / Codex 等，多内核可切换），各司其职、永不掉线。"
   }
 }

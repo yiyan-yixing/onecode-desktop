@@ -27,17 +27,18 @@ pub fn setup(app: &App) -> tauri::Result<()> {
     menu.append(&sep)?;
     menu.append(&quit)?;
 
-    // ── 托盘图标（用应用默认图标） ──
+    // ── 托盘图标（用专用小图标，不设 template 以保留颜色） ──
+    let tray_icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray_icon.png"))
+        .ok();
     let mut builder = TrayIconBuilder::with_id("main-tray")
-        .tooltip("OneCode Desktop · 一人公司的 AI 员工调度台")
-        .icon_as_template(true)
+        .tooltip("OneCode · 一人公司的 AI 员工调度台")
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(on_menu_event)
         .on_tray_icon_event(on_tray_icon_event);
 
-    if let Some(icon) = app.default_window_icon() {
-        builder = builder.icon(icon.clone());
+    if let Some(icon) = tray_icon {
+        builder = builder.icon(icon);
     }
     builder.build(app)?;
 
