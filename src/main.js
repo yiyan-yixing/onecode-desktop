@@ -341,9 +341,9 @@ function updateStatusbarBadges(data) {
     { key: 'hooks', count: data.hooks ? Object.values(data.hooks).reduce((a, v) => a + v.length, 0) : 0, icon: ICONS.hooks },
     { key: 'plugins', count: (data.plugins || []).length, icon: ICONS.plugins },
     { key: 'tasks', count: (data.tasks || []).length, icon: ICONS.tasks },
-    { key: 'statusline', count: (data.statusline || []).length, icon: ICONS.statusline },
+    { key: 'agents', count: (data.agents || []).length, icon: ICONS.agents },
   ];
-  const keys = ['skills', 'hooks', 'plugins', 'tasks', 'statusline'];
+  const keys = ['skills', 'hooks', 'plugins', 'tasks', 'agents'];
   for (const t of keys) {
     const badge = root.querySelector(`[data-cc="${t}"]`);
     const item = items.find(i => i.key === t);
@@ -352,7 +352,7 @@ function updateStatusbarBadges(data) {
       const numEl = badge.querySelector('.n');
       if (numEl && numEl.textContent !== String(n)) numEl.textContent = n;
       badge.classList.toggle('has', n > 0);
-      const title = t === 'statusline' && n > 0 ? 'statusline: 已配置' : `${t}: ${n}`;
+      const title = `${t}: ${n}`;
       badge.setAttribute('title', title);
     }
   }
@@ -389,7 +389,7 @@ const ICONS = {
   hooks: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" style="width:10px;height:10px"><path d="M6 2v4l-3 3v2h4v3l1 2 1-2v-3h4V9l-3-3V2"/><rect x="5" y="1" width="6" height="2" rx="1"/></svg>',
   plugins: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" style="width:10px;height:10px"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/></svg>',
   tasks: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" style="width:10px;height:10px"><circle cx="8" cy="8" r="6"/><polyline points="8 4 8 8 11 9.5"/></svg>',
-  statusline: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" style="width:10px;height:10px"><polyline points="2 4 6 8 2 12"/><polyline points="6 4 14 4 14 12 6 12"/></svg>',
+  agents: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" style="width:10px;height:10px"><circle cx="8" cy="5" r="2.6"/><path d="M3 14c0-2.8 2.2-4.5 5-4.5s5 1.7 5 4.5"/></svg>',
 };
 
 function showHealthWarning(reports) {

@@ -19,8 +19,8 @@ const ICONS = {
     '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/></svg>',
   tasks:
     '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><circle cx="8" cy="8" r="6"/><polyline points="8 4 8 8 11 9.5"/></svg>',
-  statusline:
-    '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><polyline points="2 4 6 8 2 12"/><polyline points="6 4 14 4 14 12 6 12"/></svg>',
+  agents:
+    '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="5" r="2.6"/><path d="M3 14c0-2.8 2.2-4.5 5-4.5s5 1.7 5 4.5"/></svg>',
 };
 
 export class CcStatusView {
@@ -75,7 +75,7 @@ export class CcStatusView {
 
   _clearBadges() {
     if (!this.badgeRoot) return;
-    const keys = ['skills', 'hooks', 'plugins', 'tasks', 'statusline'];
+    const keys = ['skills', 'hooks', 'plugins', 'tasks', 'agents'];
     for (const t of keys) {
       const pill = this.badgeRoot.querySelector(`[data-cc="${t}"]`);
       if (pill) {
@@ -88,12 +88,6 @@ export class CcStatusView {
 
   _render(data) {
     if (!this.badgeRoot) return;
-    // 更新 statusLine 输出文本（项目 scope 优先，全局兜底）
-    const slEl = document.getElementById('ribbonStatusLine');
-    if (slEl) {
-      const text = data.status_line_output || '';
-      if (slEl.textContent !== text) slEl.textContent = text;
-    }
     const counts = {
       skills: (data.skills || []).length,
       hooks: Object.values(data.hooks || {}).reduce(
@@ -102,10 +96,10 @@ export class CcStatusView {
       ),
       plugins: (data.plugins || []).length,
       tasks: (data.tasks || []).length,
-      statusline: (data.statusline || []).length,
+      agents: (data.agents || []).length,
     };
     // 增量更新：只在数值变化时才更新 DOM
-    const keys = ['skills', 'hooks', 'plugins', 'tasks', 'statusline'];
+    const keys = ['skills', 'hooks', 'plugins', 'tasks', 'agents'];
     for (const t of keys) {
       const pill = this.badgeRoot.querySelector(`[data-cc="${t}"]`);
       const n = counts[t];
@@ -114,9 +108,7 @@ export class CcStatusView {
         if (numEl && numEl.textContent !== String(n)) {
           numEl.textContent = n;
         }
-        const title = t === 'statusline' && n > 0
-          ? 'statusline: 已配置'
-          : `${t}: ${n}`;
+        const title = `${t}: ${n}`;
         pill.setAttribute('title', title);
         const hasClass = pill.classList.contains('has');
         if (n > 0 && !hasClass) pill.classList.add('has');

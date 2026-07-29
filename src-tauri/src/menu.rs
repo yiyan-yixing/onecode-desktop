@@ -30,6 +30,18 @@ pub fn setup(app: &App) -> tauri::Result<()> {
     let app_quit = MenuItem::with_id(app, "menu:quit", "退出 OneCode Desktop", true, Some("CmdOrCtrl+Q"))?;
     app_menu.append(&app_quit)?;
 
+    // ── 编辑（mac 必需：缺 Edit 菜单则 Cmd+C/V/X 系统级复制粘贴无法路由到 WKWebView）──
+    // 用 PredefinedMenuItem，mac 上自动接管 WebView 的文本选中复制/剪切/粘贴/全选，
+    // 加速键由系统提供（CmdOrCtrl+C/V/X/A），无需前端再单独绑定。
+    let edit_menu = Submenu::new(app, "编辑", true)?;
+    edit_menu.append(&PredefinedMenuItem::undo(app, Some("撤销"))?)?;
+    edit_menu.append(&PredefinedMenuItem::redo(app, Some("重做"))?)?;
+    edit_menu.append(&PredefinedMenuItem::separator(app)?)?;
+    edit_menu.append(&PredefinedMenuItem::cut(app, Some("剪切"))?)?;
+    edit_menu.append(&PredefinedMenuItem::copy(app, Some("复制"))?)?;
+    edit_menu.append(&PredefinedMenuItem::paste(app, Some("粘贴"))?)?;
+    edit_menu.append(&PredefinedMenuItem::select_all(app, Some("全选"))?)?;
+
     // ── 终端 ──
     let term_menu = Submenu::new(app, "终端", true)?;
     term_menu.append(&MenuItem::with_id(app, "menu:new", "新建终端", true, Some("CmdOrCtrl+T"))?)?;
@@ -63,6 +75,7 @@ pub fn setup(app: &App) -> tauri::Result<()> {
     // 组装主菜单（逐项 append，避免 with_items 的单态签名问题，同 tray.rs）
     let menu = Menu::new(app)?;
     menu.append(&app_menu)?;
+    menu.append(&edit_menu)?;
     menu.append(&term_menu)?;
     menu.append(&view_menu)?;
     menu.append(&win_menu)?;

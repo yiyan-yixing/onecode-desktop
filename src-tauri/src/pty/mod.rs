@@ -525,6 +525,25 @@ fn create_pty(
         remove_auth_token_from_settings();
     }
 
+    // OneCode Desktop 进程常被从一个已运行的 Claude Code 会话中拉起
+    // （make dev / npm run dev），父进程环境会带上 Claude Code 的内部会话
+    // 标记（CLAUDE_CODE_CHILD_SESSION 等）。CommandBuilder 默认继承父环境，
+    // 这些标记透传进 PTY 里的 claude 子进程后，claude 会判定自己是"子会话"
+    // → 关闭 transcript 落盘（"Transcript saving is off — inherited
+    // CLAUDE_CODE_CHILD_SESSION marker"）。
+    // 策略：清除这些纯运行时 Plumbing 标记（不含 auth/config 类，如
+    // CLAUDE_CODE_OAUTH_TOKEN 绝不能动），让 PTY 里的 claude 作为独立顶层
+    // 会话运行、正常保存 transcript。
+    for marker in [
+        "CLAUDE_CODE_CHILD_SESSION",
+        "CLAUDE_CODE_ENTRYPOINT",
+        "CLAUDE_CODE_PARENT_SESSION_ID",
+        "CLAUDE_CODE_MAIN_PROCESS_ID",
+        "CLAUDE_CODE_SSE_PORT",
+    ] {
+        cb.env_remove(marker);
+    }
+
     // portable-pty 0.8：spawn_command 在 **slave** 上（不是 master.spawn(slave, cb)）。
     // spawn 后 slave 随 pair 释放关闭，master reader 才能在子进程退出时收到 EOF。
     let child = pair
