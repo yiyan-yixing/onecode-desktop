@@ -244,6 +244,24 @@ async function init() {
   const rpToggle = document.getElementById('rightPanelToggle');
   rpToggle?.addEventListener('click', () => toggleRightPanel());
 
+  // 用 VS Code 打开当前活跃终端的工作目录（optimization-007）
+  document.getElementById('titlebarOpenVscode')?.addEventListener('click', () => {
+    const cwd = tabManager.getActiveCwd();
+    if (!cwd) return;
+    ipc.openInVscode(cwd).catch((e) => console.warn('[vscode] open failed', e));
+  });
+
+  // Ctrl/Cmd+Click 外链 → 系统浏览器打开（optimization-005）
+  // 覆盖 Markdown 预览等 DOM <a> 链接；终端内 URL 由 xterm web-links handler 单独路由。
+  document.addEventListener('click', (e) => {
+    if (!(e.ctrlKey || e.metaKey)) return;
+    const link = e.target.closest('a[href]');
+    if (!link || !link.href) return;
+    if (!/^https?:\/\//i.test(link.href)) return; // 仅外链，应用内锚点不拦截
+    e.preventDefault();
+    ipc.openExternal(link.href).catch(() => {});
+  });
+
   // Session restore
   try {
     const slots = await ipc.sessionRestore();

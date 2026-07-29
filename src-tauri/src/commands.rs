@@ -624,3 +624,95 @@ pub async fn get_home_dir() -> Result<String, String> {
 pub fn debug_log(tag: String, msg: String) {
     log::info!("[js:{tag}] {msg}");
 }
+
+// ── 外链 / 编辑器打开（optimization-005 / 007）───────────────────────
+
+/// Ctrl/Cmd+Click 链接：用系统默认浏览器打开外链。
+/// 走 std::process 直接调系统 opener（mac `open` / win `start` / linux `xdg-open`），
+/// 不依赖 GUI PATH、无需额外插件权限（tauri-plugin-shell 的 open 已被官方标记 deprecated）。
+#[tauri::command]
+pub fn open_external(url: String) -> Result<(), String> {
+    open_with_default(&url)
+}
+
+/// "用 VS Code 打开"：用本地 VS Code 打开目录/文件。
+/// 优先 `code` CLI，失败时按平台回退（mac `open -a`、win `cmd /C code`、linux `xdg-open`）。
+#[tauri::command]
+pub fn open_in_vscode(path: String) -> Result<(), String> {
+    spawn_editor(&path)
+}
+
+/// 用系统默认处理器打开 URL/路径（mac `open` / win `start` / linux `xdg-open`）。
+fn open_with_default(target: &str) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        return std::process::Command::new("open")
+            .arg(target)
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| format!("open failed: {e}"));
+    }
+    #[cfg(target_os = "windows")]
+    {
+        return std::process::Command::new("cmd")
+            .args(["/C", "start", "", target])
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| format!("open failed: {e}"));
+    }
+    #[cfg(target_os = "linux")]
+    {
+        return std::process::Command::new("xdg-open")
+            .arg(target)
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| format!("open failed: {e}"));
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    {
+        let _ = target;
+        Err("unsupported platform".into())
+    }
+}
+
+fn spawn_editor(path: &str) -> Result<(), String> {
+    // 优先 code CLI（若已装 "Install 'code' in PATH"）。
+    // GUI app 的 PATH 受限（mac 上通常不含 /usr/local/bin），此 spawn 多数会失败 → 走平台回退。
+    if std::process::Command::new("code")
+        .arg(path)
+        .spawn()
+        .is_ok()
+    {
+        return Ok(());
+    }
+    #[cfg(target_os = "macos")]
+    {
+        // open -a 按应用名定位，不依赖 PATH；VS Code 未安装时 spawn 失败返回错误
+        return std::process::Command::new("open")
+            .args(["-a", "Visual Studio Code", path])
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| format!("open VS Code failed: {e}"));
+    }
+    #[cfg(target_os = "windows")]
+    {
+        return std::process::Command::new("cmd")
+            .args(["/C", "code", path])
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| format!("open VS Code failed: {e}"));
+    }
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(path)
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| format!("open failed: {e}"))
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    {
+        let _ = path;
+        Err("unsupported platform".into())
+    }
+}

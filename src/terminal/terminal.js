@@ -1,6 +1,8 @@
 // xterm.js 初始化 + Aurora 主题（极光深度色系）。
 // xterm 走 UMD 全局（script 标签加载），通过 window.Terminal / window.FitAddon 等访问。
 
+import * as ipc from '../ipc-bridge.js';
+
 export function createTerminal(containerEl) {
   const Terminal = window.Terminal;
   const FitAddon = window.FitAddon;
@@ -68,7 +70,14 @@ export function createTerminal(containerEl) {
     }
   };
 
-  if (WebLinksAddon) term.loadAddon(new WebLinksAddon.WebLinksAddon());
+  // 终端内 URL 点击 → 系统默认浏览器打开（optimization-005）。
+  // 不传 handler 时 xterm 默认走 window.open，在 Tauri webview 内会被拦截或应用内导航。
+  if (WebLinksAddon) {
+    const linkHandler = (_event, uri) => {
+      if (/^https?:\/\//i.test(uri)) ipc.openExternal(uri).catch(() => {});
+    };
+    term.loadAddon(new WebLinksAddon.WebLinksAddon(linkHandler));
+  }
   term.open(containerEl);
 
   // ── 自定义滚轮加速器（xterm 5.5 官方 API）──

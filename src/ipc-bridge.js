@@ -317,3 +317,15 @@ export async function fsListDir(path) {
 export async function fsReadFile(path) {
   return safeInvoke('fs_read_file', { path });
 }
+
+// ── 外链 / 编辑器打开（optimization-005 / 007）──────────────────────
+
+/** 用系统默认浏览器打开外链（Ctrl/Cmd+Click 链接、Markdown 预览链接）。 */
+export async function openExternal(url) {
+  return safeInvoke('open_external', { url });
+}
+
+/** 用本地 VS Code 打开目录/文件（"用 VS Code 打开"按钮）。 */
+export async function openInVscode(path) {
+  return safeInvoke('open_in_vscode', { path });
+}

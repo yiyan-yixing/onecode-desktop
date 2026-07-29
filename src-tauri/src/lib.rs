@@ -142,6 +142,8 @@ pub fn run() {
             wizard::save_wizard_config,
             backend::list_backends,
             commands::debug_log,
+            commands::open_external,
+            commands::open_in_vscode,
         ])
         .on_menu_event(crate::menu::on_menu_event)
         .run(tauri::generate_context!())
