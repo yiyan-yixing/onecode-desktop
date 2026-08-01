@@ -72,14 +72,18 @@ release: static
 
 install: release
 	@echo ">>> 安装到 /Applications..."
+	-hdiutil detach "/Volumes/OneCode" 2>/dev/null || true
 	-hdiutil detach "/Volumes/OneCode Desktop" 2>/dev/null || true
 	DMG="$$(ls -d "$(ROOT)/target/release/bundle/dmg/"*.dmg 2>/dev/null | head -1)"; \
 	if [ -z "$$DMG" ]; then echo "错误: 未找到 DMG 文件"; exit 1; fi; \
 	echo ">>> 挂载 $$DMG ..."; \
-	hdiutil attach "$$DMG"; \
-	cp -R "/Volumes/OneCode Desktop/OneCode Desktop.app" /Applications/; \
-	hdiutil detach "/Volumes/OneCode Desktop"
-	@echo ">>> 完成。可从启动台或 /Applications 打开 OneCode Desktop"
+	hdiutil attach "$$DMG" -nobrowse -mountpoint "/Volumes/OneCode" || exit 1; \
+	APP="$$(ls -d /Volumes/OneCode/*.app 2>/dev/null | head -1)"; \
+	if [ -z "$$APP" ]; then echo "错误: 挂载卷内未找到 .app"; hdiutil detach "/Volumes/OneCode"; exit 1; fi; \
+	cp -R "$$APP" /Applications/; \
+	hdiutil detach "/Volumes/OneCode"
+	@echo ">>> 完成。可从启动台或 /Applications 打开 OneCode"
+
 
 clean:
 	cd $(TAURI_DIR) && cargo clean

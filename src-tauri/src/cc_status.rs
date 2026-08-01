@@ -407,10 +407,11 @@ fn load_status_line(
                 Some(v) => v,
                 None => continue,
             };
-            let cmd_type = match sl.get("type").and_then(|v| v.as_str()) {
-                Some("command") => "command",
+            // 只认 statusLine.type == "command"，其余跳过
+            match sl.get("type").and_then(|v| v.as_str()) {
+                Some("command") => {}
                 _ => continue,
-            };
+            }
             let cmd = match sl.get("command").and_then(|v| v.as_str()) {
                 Some(c) if !c.is_empty() => c,
                 _ => continue,
