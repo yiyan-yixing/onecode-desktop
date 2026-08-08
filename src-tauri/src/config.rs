@@ -35,6 +35,9 @@ pub struct AppConfig {
     /// Setup Wizard 是否已完成
     #[serde(default)]
     pub wizard_completed: bool,
+    /// 当前激活的 provider id（providers.json 目录中的引用；None = 回退现状单供应商）
+    #[serde(default)]
+    pub active_provider_id: Option<String>,
     /// 默认后端内核（"claude-code" / "opencode" / "codex" 等）
     #[serde(default = "default_backend")]
     pub default_backend: String,
@@ -72,6 +75,7 @@ impl Default for AppConfig {
             base_url: default_base_url(),
             model: default_model(),
             wizard_completed: false,
+            active_provider_id: None,
             default_backend: default_backend(),
         }
     }
@@ -143,7 +147,7 @@ impl ConfigManager {
 }
 
 /// 前端 Settings 面板提交的配置片段（所有字段可选，仅更新提供的字段）
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Default)]
 pub struct ConfigUpdate {
     pub default_cmd: Option<String>,
     pub default_args: Option<Vec<String>>,
@@ -155,6 +159,8 @@ pub struct ConfigUpdate {
     pub model: Option<String>,
     pub wizard_completed: Option<bool>,
     pub default_backend: Option<String>,
+    /// 外 Option = 是否提供该字段；内 Option = 值（None 表示清除 provider 指针）
+    pub active_provider_id: Option<Option<String>>,
 }
 
 impl ConfigUpdate {
@@ -189,6 +195,9 @@ impl ConfigUpdate {
         }
         if let Some(v) = &self.default_backend {
             cfg.default_backend = v.clone();
+        }
+        if let Some(v) = &self.active_provider_id {
+            cfg.active_provider_id = v.clone();
         }
     }
 }

@@ -151,7 +151,14 @@ impl MultiPtyManager {
             reader,
             child,
             pid,
-        } = create_pty(&slot.cmd, &slot.args, &slot.cwd, &slot.env, cols, rows)?;
+        } = create_pty(
+            &slot.cmd,
+            &slot.args,
+            &slot.cwd,
+            &recover_lock!(slot.env.lock(), "env"),
+            cols,
+            rows,
+        )?;
         slot.replace_handles(master, killer, pid);
 
         start_reader_batcher(
@@ -199,6 +206,47 @@ impl MultiPtyManager {
         Ok(())
     }
 
+    /// 刷新 slot 的 env（切档后用新 config 覆盖 profile 管理的键，保留自定义键）。
+    /// ADR §5.3 坑①：`pty.restart` 复用 slot 旧 env，切档后必须显式刷新 env 再 restart，
+    /// 否则切了模型、进程还是旧 env。
+    pub async fn refresh_env(&self, id: Uuid, config: &AppConfig) -> Result<()> {
+        let slot = self
+            .get_slot(id)
+            .await
+            .ok_or_else(|| anyhow!("slot not found"))?;
+        let backend = slot.backend.clone();
+        let profile = crate::backend::resolve_or_default(&backend);
+        let mut env = recover_lock!(slot.env.lock(), "env").clone();
+        for (config_key, env_var) in profile.env_key_map {
+            match *config_key {
+                "api_key" => {
+                    if !config.api_key.is_empty() {
+                        env.insert(env_var.to_string(), config.api_key.clone());
+                    } else {
+                        env.remove(*env_var);
+                    }
+                }
+                "base_url" => {
+                    if !config.base_url.is_empty() {
+                        env.insert(env_var.to_string(), config.base_url.clone());
+                    } else {
+                        env.remove(*env_var);
+                    }
+                }
+                "model" => {
+                    if !config.model.is_empty() {
+                        env.insert(env_var.to_string(), config.model.clone());
+                    } else {
+                        env.remove(*env_var);
+                    }
+                }
+                _ => {}
+            }
+        }
+        *recover_lock!(slot.env.lock(), "env") = env;
+        Ok(())
+    }
+
     /// 手动重启：复用 cmd/args/cwd/env，清空 buffer，重置重启计数。
     /// 前端传入新的 data_channel（旧 Channel 已失效）+ 终端当前尺寸。
     pub async fn restart(
@@ -234,7 +282,7 @@ impl MultiPtyManager {
             &slot.cmd,
             &slot.args,
             &slot.cwd,
-            &slot.env,
+            &recover_lock!(slot.env.lock(), "env"),
             effective_cols,
             effective_rows,
         )?;
@@ -320,7 +368,7 @@ impl MultiPtyManager {
                 cmd: s.cmd.clone(),
                 args: s.args.clone(),
                 cwd: s.cwd.clone(),
-                env: s.env.clone(),
+                env: recover_lock!(s.env.lock(), "env").clone(),
                 backend: s.backend.clone(),
                 created_at: s.created_at.to_rfc3339(),
                 last_active_at: recover_lock!(s.last_active_at.lock(), "last_active_at").clone(),
@@ -785,7 +833,7 @@ fn start_wait(
             &slot.cmd,
             &slot.args,
             &slot.cwd,
-            &slot.env,
+            &recover_lock!(slot.env.lock(), "env"),
             pty_size.map(|s| s.cols),
             pty_size.map(|s| s.rows),
         ) {

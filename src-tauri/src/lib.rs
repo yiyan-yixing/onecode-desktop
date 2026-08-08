@@ -12,6 +12,7 @@ mod fs_explorer;
 mod keep_awake;
 mod menu;
 mod pty;
+mod providers;
 mod session;
 mod tray;
 mod wizard;
@@ -46,6 +47,16 @@ pub fn run() {
                 w.open_devtools();
             }
 
+            // 供应商目录（providers.json，独立单一真相；M1 多供应商管理 + 手动切换）
+            let provider_catalog = providers::load_from_file();
+            // 启动对账（P1-1）：providers.json 有 active 但 desktop.json 未同步时回写，
+            // 确保后续 ConfigManager/watcher 从一致状态启动。
+            if let Err(e) = providers::reconcile_active_to_desktop(&provider_catalog) {
+                log::warn!("[providers] reconcile failed (P1, non-fatal): {e}");
+            }
+            let provider_store = providers::ProviderStore::new(provider_catalog);
+            app.manage(provider_store);
+
             // 应用配置（从 ~/.onecode/desktop.json 加载，无则用默认值）
             let app_config = config::load_from_file();
             let cfg_arc = Arc::new(app_config.clone());
@@ -55,9 +66,8 @@ pub fn run() {
             // PTY 管理器（核心）
             let pty_mgr = MultiPtyManager::new(app.handle().clone(), cfg_arc.clone(), runtime);
             app.manage(pty_mgr);
-
-            // pty_spawn 用的只读配置
-            app.manage(cfg_arc);
+            // P0-1 修复：不再 manage 冻结的 Arc<AppConfig>。pty_spawn / pty_refresh_env
+            // 改从 ConfigManager 的 Arc<RwLock<AppConfig>> 读当前值，切档即时生效。
 
             // CC Status 缓存
             let global_dir = std::env::var("HOME")
@@ -144,6 +154,14 @@ pub fn run() {
             commands::debug_log,
             commands::open_external,
             commands::open_in_vscode,
+            commands::providers_list,
+            commands::providers_presets,
+            commands::providers_add,
+            commands::providers_update,
+            commands::providers_delete,
+            commands::providers_test,
+            commands::providers_switch,
+            commands::pty_refresh_env,
         ])
         .on_menu_event(crate::menu::on_menu_event)
         .run(tauri::generate_context!())

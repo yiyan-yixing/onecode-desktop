@@ -26,6 +26,7 @@ import { ThemeManager } from './theme.js';
 import { AmbientController } from './ambient.js';
 import { initWizard, destroyWizard } from './wizard.js';
 import { SettingsController } from './settings.js';
+import { ModelSwitchController } from './provider-switch.js';
 import * as ipc from './ipc-bridge.js';
 const tabManager = new TabManager();
 const orbital = new OrbitalController();
@@ -34,6 +35,7 @@ const ripple = new RippleController();
 const fileExplorer = new FileExplorerController();
 const agentsList = new AgentsListController();
 const settings = new SettingsController();
+const modelSwitch = new ModelSwitchController();
 const themeManager = new ThemeManager();
 const ambientController = new AmbientController();
 let ccView = null;
@@ -101,6 +103,7 @@ async function init() {
   tabManager.ripple = ripple;
   orbital.init(tabManager);
   palette.init(tabManager);
+  palette.setModelSwitch(() => modelSwitch.openSwitcher());
   ripple.init();
 
   // 监听配置文件外部变更（agent 直接修改后热刷新）
@@ -158,6 +161,9 @@ async function init() {
   };
   ccView.start();
   updateStatusbarConfig();
+
+  // M1: 模型芯片 + 供应商切换
+  modelSwitch.init(tabManager);
 
   // Wizard gate — 首次启动引导（controller 初始化后、session restore 前）
   let wizardResult = null;
@@ -395,6 +401,9 @@ async function updateStatusbarConfig() {
     labelEl.textContent = BACKEND_SHORT[backend] || backend;
     modelEl.textContent = model;
     root.dataset.backend = backend;
+    // M1: 芯片文本由 ModelSwitchController.renderChip 主导，这里确保 model 兜底一致
+    const chip = document.getElementById('ribbonProviderChip');
+    if (chip && chip.dataset.owner !== 'modelSwitch') { chip.dataset.owner = 'modelSwitch'; }
   } catch (e) {
     labelEl.textContent = '--';
     modelEl.textContent = '';
@@ -427,6 +436,12 @@ function showHealthWarning(reports) {
 function initKeybindings(tm) {
   const mod = navigator.platform.includes('Mac') ? 'metaKey' : 'ctrlKey';
   window.addEventListener('keydown', (e) => {
+    // M1: F2 → 切换模型（F2 选择器）
+    if (e.key === 'F2') {
+      e.preventDefault();
+      modelSwitch.openSwitcher();
+      return;
+    }
     // Cmd+K → toggle palette
     if (e[mod] && e.key.toLowerCase() === 'k') {
       e.preventDefault();

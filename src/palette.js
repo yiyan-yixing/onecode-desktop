@@ -22,6 +22,7 @@ export class PaletteController {
     this.input = null;
     this.results = null;
     this.agentProvider = null;
+    this._modelSwitch = null; // M1: 切换模型回调
     this._selIdx = 0;
     this._items = [];
     this._open = false;
@@ -51,6 +52,11 @@ export class PaletteController {
   /** P1-4: set callback to open settings panel */
   setOpenSettings(fn) {
     this._openSettings = fn;
+  }
+
+  /** M1: set callback to open model switcher (/model) */
+  setModelSwitch(fn) {
+    this._modelSwitch = fn;
   }
 
   open() {
@@ -135,8 +141,11 @@ export class PaletteController {
     const isSettingMode = q.startsWith('>');
     const isAgentMode = q.startsWith('@');
     const isNewMode = q.startsWith('new') || q.startsWith('+');
+    const isModelMode = q.startsWith('/model');
 
-    if (isSettingMode) {
+    if (isModelMode) {
+      this._renderModel(q);
+    } else if (isSettingMode) {
       this._renderSettings(q.slice(1).trim());
     } else if (isAgentMode) {
       this._renderAgents(q.slice(1).trim());
@@ -228,6 +237,22 @@ export class PaletteController {
     html += '<span style="font-size:11px;color:var(--text-void)">Skills · Hooks · Plugins · Tasks</span>';
     html += '</div>';
 
+    this.results.innerHTML = html;
+  }
+
+  /** M1: /model — 打开模型切换 */
+  _renderModel(q) {
+    let html = '<div class="palette-group-label">模型</div>';
+    if (q === '/model' || q === '/model ') {
+      html +=
+        `<div class="palette-item sel" data-idx="0">` +
+        `<span class="palette-item-icon" style="background:var(--id-emerald)">⟳</span>` +
+        `<span class="palette-item-label">切换模型…</span>` +
+        `<span class="palette-item-detail">F2</span></div>`;
+      this._items.push({ action: () => { this._modelSwitch?.(); } });
+    } else {
+      html += '<div class="palette-item" style="cursor:default"><span class="palette-item-label" style="color:var(--text-void)">输入 /model 回车打开切换器</span></div>';
+    }
     this.results.innerHTML = html;
   }
 

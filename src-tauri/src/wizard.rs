@@ -123,6 +123,7 @@ pub async fn save_wizard_config(
         model: Some(config.model),
         wizard_completed: Some(true),
         default_backend: Some(config.backend),
+        active_provider_id: None,
     };
     update.apply_to(&mut cfg);
 

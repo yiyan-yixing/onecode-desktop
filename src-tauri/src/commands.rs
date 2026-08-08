@@ -7,14 +7,14 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use tauri::ipc::Channel;
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
 
 use crate::cc_sessions::CcSessionsCache;
 use crate::cc_status::CcStatusCache;
 use crate::config::{AppConfig, ConfigManager, ConfigUpdate};
+use crate::providers::{self, ProviderInput, ProviderStore, ProviderUpdate};
 use crate::pty::health::{check_health, HealthReport};
 use crate::pty::{MultiPtyManager, SlotConfig, SlotSummary};
 use crate::session::{PersistentSlot, SessionStore};
@@ -43,8 +43,13 @@ pub async fn pty_spawn(
     rows: Option<u16>,
     data_channel: Channel<Vec<u8>>,
     state: State<'_, MultiPtyManager>,
-    config: State<'_, Arc<AppConfig>>,
+    cfg_mgr: State<'_, ConfigManager>,
 ) -> Result<SpawnResult, String> {
+    // 从 ConfigManager 读当前配置快照（M1 切档后新 spawn 读到新 creds；修复 P0-1：
+    // 托管 Arc<AppConfig> 在 Tauri 2 无法覆盖，必须读可变 RwLock 而非冻结快照）
+    let cfg_arc = cfg_mgr.arc();
+    let config = cfg_arc.read().await;
+    let config = &*config; // RwLockReadGuard → &AppConfig
     // 根据后端 profile 解析默认命令/参数/环境变量
     let effective_backend = backend.as_deref().unwrap_or(&config.default_backend);
     let profile = crate::backend::resolve_or_default(effective_backend);
@@ -715,4 +720,113 @@ fn spawn_editor(path: &str) -> Result<(), String> {
         let _ = path;
         Err("unsupported platform".into())
     }
+}
+
+// ── Provider 管理（M1：多供应商 + 手动切换）────────────────────────
+
+/// 列出全部供应商 + 目录元数据（前端 F3 / 芯片渲染用）
+#[tauri::command]
+pub async fn providers_list(store: State<'_, ProviderStore>) -> Result<crate::providers::ProviderCatalog, String> {
+    let cat = store.arc().read().await.clone();
+    Ok(cat)
+}
+
+/// 列出两档预置供应商（新增时下拉带出默认 base_url + 型号）
+#[tauri::command]
+pub async fn providers_presets() -> Result<Vec<crate::providers::ProviderPreset>, String> {
+    Ok(crate::providers::PRESETS.to_vec())
+}
+
+/// 新增供应商（预设或自定义四要素）
+#[tauri::command]
+pub async fn providers_add(
+    provider: ProviderInput,
+    app: AppHandle,
+    cfg_mgr: State<'_, ConfigManager>,
+    store: State<'_, ProviderStore>,
+) -> Result<crate::providers::Provider, String> {
+    let saved = providers::add_provider(&store, provider).await?;
+    // P2-3: 首个供应商自动激活后，把 creds 同步到 desktop.json（复用切换链路）
+    let was_auto_active = {
+        let cat_arc = store.arc();
+        let cat = cat_arc.read().await;
+        cat.active_provider_id.as_deref() == Some(saved.id.as_str())
+    };
+    if was_auto_active {
+        providers::perform_switch(&app, &cfg_mgr, &store, &saved.id).await?;
+    }
+    let _ = app.emit("providers-changed", ());
+    Ok(saved)
+}
+
+/// 编辑供应商
+#[tauri::command]
+pub async fn providers_update(
+    id: String,
+    updates: ProviderUpdate,
+    app: AppHandle,
+    cfg_mgr: State<'_, ConfigManager>,
+    store: State<'_, ProviderStore>,
+) -> Result<(), String> {
+    providers::update_provider(&store, &cfg_mgr, id, updates).await?;
+    let _ = app.emit("providers-changed", ());
+    Ok(())
+}
+
+/// 删除供应商（删除约束由后端强制：仅剩 1 家 / 当前使用中不可删）
+#[tauri::command]
+pub async fn providers_delete(
+    id: String,
+    app: AppHandle,
+    store: State<'_, ProviderStore>,
+) -> Result<(), String> {
+    providers::delete_provider(&store, id).await?;
+    let _ = app.emit("providers-changed", ());
+    Ok(())
+}
+
+/// 测试供应商连通性（AC-F3.3：最小 completion → 延迟 + 状态）
+#[tauri::command]
+pub async fn providers_test(
+    id: String,
+    store: State<'_, ProviderStore>,
+) -> Result<crate::providers::TestConnectionResult, String> {
+    let cat_arc = store.arc();
+    let provider = {
+        let cat = cat_arc.read().await;
+        cat.providers
+            .iter()
+            .find(|p| p.id == id)
+            .cloned()
+            .ok_or_else(|| format!("供应商不存在: {id}"))?
+    };
+    // 先 drop 读锁再 await（curl -m 15 阻塞期间不让写操作等锁）
+    Ok(providers::test_connection(&provider).await)
+}
+
+/// 手动切换（F2：写 desktop.json + providers.json → 刷新托管 AppConfig → emit provider-switched）
+#[tauri::command]
+pub async fn providers_switch(
+    provider_id: String,
+    app: AppHandle,
+    cfg_mgr: State<'_, ConfigManager>,
+    store: State<'_, ProviderStore>,
+) -> Result<(), String> {
+    providers::perform_switch(&app, &cfg_mgr, &store, &provider_id).await
+}
+
+/// 切档后刷新指定 slot 的 env（ADR 坑①：pty.restart 复用旧 env，必须先刷新）
+/// 前端在 provider-switched 后对每个运行中 tab 先调本命令再 pty_restart。
+#[tauri::command]
+pub async fn pty_refresh_env(
+    id: String,
+    state: State<'_, MultiPtyManager>,
+    cfg_mgr: State<'_, ConfigManager>,
+) -> Result<(), String> {
+    let cfg_arc = cfg_mgr.arc();
+    let config = cfg_arc.read().await;
+    state
+        .refresh_env(parse_id(&id)?, &config)
+        .await
+        .map_err(|e| e.to_string())
 }

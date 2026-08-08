@@ -140,7 +140,7 @@ pub struct TerminalSlot {
     pub cmd: String,
     pub args: Vec<String>,
     pub cwd: String,
-    pub env: HashMap<String, String>,
+    pub env: Mutex<HashMap<String, String>>,
     /// 后端内核标识（"claude-code" / "opencode" / "codex" 等）
     pub backend: String,
     pub status: Mutex<SlotStatus>,
@@ -192,7 +192,7 @@ impl TerminalSlot {
             cmd,
             args,
             cwd,
-            env,
+            env: Mutex::new(env),
             backend,
             status: Mutex::new(SlotStatus::Running),
             exit_code: Mutex::new(None),

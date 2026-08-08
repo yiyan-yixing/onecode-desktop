@@ -239,6 +239,59 @@ export function onConfigChanged(callback) {
   return listen('config-changed', () => callback());
 }
 
+
+// ── M1：多供应商 / 模型切换（Provider）────────────────────────────────
+
+/** 列出全部供应商 + 目录元数据（F3 / 芯片渲染用） */
+export async function providersList() {
+  return safeInvoke('providers_list');
+}
+
+/** 两档预置供应商（新增时下拉带出默认 base_url + 型号） */
+export async function providersPresets() {
+  return safeInvoke('providers_presets');
+}
+
+/** 新增供应商（预设或自定义四要素） */
+export async function providersAdd(provider) {
+  return safeInvoke('providers_add', { provider });
+}
+
+/** 编辑供应商（仅覆盖提供的字段） */
+export async function providersUpdate(id, updates) {
+  return safeInvoke('providers_update', { id, updates });
+}
+
+/** 删除供应商（后端强制约束：仅剩 1 家 / 当前使用中不可删） */
+export async function providersDelete(id) {
+  return safeInvoke('providers_delete', { id });
+}
+
+/** 测试供应商连通性（返回 { ok, latency_ms, error }） */
+export async function providersTest(id) {
+  return safeInvoke('providers_test', { id });
+}
+
+/** 手动切换（F2：写 desktop.json + providers.json → 重启会话） */
+export async function providersSwitch(providerId) {
+  return safeInvoke('providers_switch', { providerId });
+}
+
+/** 切档后刷新指定 slot 的 env（pty.restart 复用旧 env，必须先刷新） */
+export async function ptyRefreshEnv(id) {
+  return safeInvoke('pty_refresh_env', { id });
+}
+
+/** 切换成功事件（payload: { from, to, reason }） */
+export function onProviderSwitched(callback) {
+  return listen('provider-switched', (event) => callback(event.payload));
+}
+
+/** 供应商目录变更事件（增删改后由后端 emit） */
+export function onProvidersChanged(callback) {
+  return listen('providers-changed', () => callback());
+}
+
 // ── 项目管理 ──────────────────────────────────────────────────────────
 
 /** 保存项目元数据到 ~/.onecode/projects/<name>.json */
