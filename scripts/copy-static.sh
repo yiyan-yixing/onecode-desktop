@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# 从 node_modules 同步 xterm.js + addons + marked + highlight.js 到 src/static/。
+# 从 node_modules 同步 xterm.js + addons + marked + highlight.js + monaco-editor 到 src/static/。
 # 前提：仓库根目录已执行 `npm install`。
 #
 # 用途：Tauri 打包时 frontendDist = src/，静态资源必须在其内。
@@ -66,6 +66,20 @@ if [ -e "$SRC/highlight.js/styles/github-dark.min.css" ]; then
 elif [ -e "$SRC/highlight.js/styles/github-dark.css" ]; then
     cp "$SRC/highlight.js/styles/github-dark.css" "$DST/hljs.css"
     echo "✓ hljs.css"
+fi
+
+# ── Monaco Editor（编辑器视图最小原型，M3 探索）──
+# 拷贝 monaco-editor 的 AMD/min 构建到 src/static/vs/，由
+# src/editor/monaco-preview.js 动态加载（loader.js + editor.main.js）。
+# 生成物约 13MB，src/static 已 gitignore，不入库。
+if [ -d "$SRC/monaco-editor/min/vs" ]; then
+    rm -rf "$DST/vs"
+    cp -R "$SRC/monaco-editor/min/vs" "$DST/vs"
+    echo "✓ vs/ (monaco-editor, $(du -sh "$DST/vs" 2>/dev/null | awk '{print $1}'))"
+else
+    echo "✗ 缺失依赖文件：$SRC/monaco-editor/min/vs（monaco-editor 未安装）" >&2
+    echo "  请先在仓库根目录执行：npm install" >&2
+    exit 1
 fi
 
 # 清理上次拷贝遗留的 .map 文件（不再需要）

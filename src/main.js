@@ -28,6 +28,7 @@ import { initWizard, destroyWizard } from './wizard.js';
 import { SettingsController } from './settings.js';
 import { ModelSwitchController } from './provider-switch.js';
 import * as ipc from './ipc-bridge.js';
+import { MonacoPreviewController } from './editor/monaco-preview.js';
 const tabManager = new TabManager();
 const orbital = new OrbitalController();
 const palette = new PaletteController();
@@ -39,6 +40,7 @@ const modelSwitch = new ModelSwitchController();
 const themeManager = new ThemeManager();
 const ambientController = new AmbientController();
 let ccView = null;
+let monacoPreview = null; // M3: Monaco 编辑器原型
 
 // ── Right panel Tab state ──────────────────────────────────────────
 let _activeRightTab;
@@ -104,6 +106,10 @@ async function init() {
   orbital.init(tabManager);
   palette.init(tabManager);
   palette.setModelSwitch(() => modelSwitch.openSwitcher());
+  // M3: Monaco 编辑器最小原型（纯前端，独立模块，可回退）
+  monacoPreview = new MonacoPreviewController();
+  monacoPreview.init();
+  palette.setOpenEditor(() => { palette.close(); monacoPreview && monacoPreview.open(); });
   ripple.init();
 
   // 监听配置文件外部变更（agent 直接修改后热刷新）
@@ -211,6 +217,8 @@ async function init() {
   emptyNewTerm?.addEventListener('click', createFirstTerminal);
   // 「⌘K 命令面板」次按钮：明确第二条入口
   emptyPalette?.addEventListener('click', () => palette.toggle());
+  // M3: 编辑器原型入口（⌘E 亦可）
+  document.getElementById('emptyEditor')?.addEventListener('click', () => monacoPreview && monacoPreview.open());
 
   // 最近项目卡片（复用 ipc.listProjects，取最近 3 个）
   renderEmptyRecent();
@@ -445,6 +453,8 @@ function initKeybindings(tm) {
     // Cmd+K → toggle palette
     if (e[mod] && e.key.toLowerCase() === 'k') {
       e.preventDefault();
+      // 编辑器浮层 z-index 高于命令面板，先收起避免面板被遮
+      if (monacoPreview) monacoPreview.close();
       palette.toggle();
       return;
     }
@@ -482,6 +492,14 @@ function initKeybindings(tm) {
       }
     }
 
+    // M3: Cmd+E → Monaco 编辑器原型（放在终端焦点守卫之后，
+    // 避免非 Mac 平台在终端内拦截 Ctrl+E=行尾；Mac 平台 Cmd+E 无冲突）
+    if (e[mod] && e.key.toLowerCase() === 'e') {
+      e.preventDefault();
+      if (palette) palette.close();
+      if (monacoPreview) monacoPreview.toggle();
+      return;
+    }
     if (key === 't') {
       e.preventDefault();
       if (e.shiftKey) {

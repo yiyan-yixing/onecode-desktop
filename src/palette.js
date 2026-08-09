@@ -23,6 +23,7 @@ export class PaletteController {
     this.results = null;
     this.agentProvider = null;
     this._modelSwitch = null; // M1: 切换模型回调
+    this._openEditor = null; // M3: 打开 Monaco 编辑器原型回调
     this._selIdx = 0;
     this._items = [];
     this._open = false;
@@ -57,6 +58,11 @@ export class PaletteController {
   /** M1: set callback to open model switcher (/model) */
   setModelSwitch(fn) {
     this._modelSwitch = fn;
+  }
+
+  /** M3: set callback to open Monaco 编辑器原型 */
+  setOpenEditor(fn) {
+    this._openEditor = fn;
   }
 
   open() {
@@ -230,6 +236,14 @@ export class PaletteController {
       `<span class="palette-item-label">偏好设置</span>` +
       `<span class="palette-item-detail">输入 &gt; 编辑</span></div>`;
     this._items.push({ action: () => { this._openSettings?.(); } });
+
+    // M3: Monaco 编辑器原型（探索性，可回退）
+    html +=
+      `<div class="palette-item" data-idx="${this._items.length}">` +
+      `<span class="palette-item-icon" style="background:var(--stone)">{ }</span>` +
+      `<span class="palette-item-label">编辑器原型</span>` +
+      `<span class="palette-item-kbd">⌘E</span></div>`;
+    this._items.push({ action: () => { this._openEditor?.(); } });
 
     // CC Status summary
     html += '<div class="palette-group-label">状态</div>';
