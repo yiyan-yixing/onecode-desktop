@@ -27,13 +27,16 @@ pub fn setup(app: &App) -> tauri::Result<()> {
     menu.append(&sep)?;
     menu.append(&quit)?;
 
-    // ── 托盘图标（用专用小图标，不设 template 以保留颜色） ──
+    // ── 托盘图标：品牌首字母 OC 模板图标（黑 + alpha） ──
+    // macOS 开启 template 后按菜单栏明暗自适应着色（浅色栏→黑、深色栏→白），原生且不突兀。
+    // 源图 44x44：tray-icon 在 macOS 统一缩放到 18pt 高，高分辨率源保证 Retina 下清晰。
     let tray_icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray_icon.png"))
         .ok();
     let mut builder = TrayIconBuilder::with_id("main-tray")
         .tooltip("OneCode · 一人公司的 AI 员工调度台")
         .menu(&menu)
         .show_menu_on_left_click(false)
+        .icon_as_template(true)
         .on_menu_event(on_menu_event)
         .on_tray_icon_event(on_tray_icon_event);
 
