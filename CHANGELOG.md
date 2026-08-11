@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added — M1 多供应商管理 + 手动切换（模型自动切换 Phase 1 · Layer A）
+
+- **多供应商管理**：`~/.onecode/providers.json` 供应商目录 CRUD（新增/列表/编辑/删除/测试连接）+ 两档预设（DeepSeek-V4-Flash / GLM-5.2）+ 自定义四要素（名称 / Base URL / API Key / 型号）。
+- **手动切换**：状态栏模型芯片（C1）+ `/model` 命令 + F2 快捷键 → F2 选择器 → 活跃会话确认（G1）→ 写 `desktop.json` + `providers.json` → 重启会话 → ⟳ 态 + toast。
+- **后端链路**：`perform_switch` 写 ConfigManager RwLock + `desktop.json` → `pty_spawn` 读当前值 → `env_key_map` 注入新进程（`pty_spawn` env 注入零改动）。
+- **删除约束**：使用中 / 仅剩 1 家不可删（后端强制）。
+- **切换历史**：FIFO 50 条，`reason=manual`。
+- **回滚可逆**：删 `providers.json` + 移除 `active_provider_id` → 回退单供应商（ADR §7 Layer A 可逆）。
+
 ## [0.3.0] — 2026-07-23
 
 ### Changed — 产品优化（苹果式 P0 审视）
