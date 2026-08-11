@@ -1,0 +1,453 @@
+/* ═══════════════════════════════════════════════════════════════════
+ * vscode-skin.css — VS Code Dark+ 贴皮层（下一版 v0.3.1）
+ *
+ * 方案：在不改 Tauri 底座、不改终端/M1 链路的前提下，把外壳 UI 视觉
+ * 对齐 VS Code Dark+。纯 CSS 覆盖层，加载在 styles.css 之后，可整体
+ * 摘除回退。
+ *
+ * 设计令牌采用 VS Code Dark+ 官方值（dark_plus.json 主色）。
+ * 语义色（ok=emerald / warn=amber / error=red）保留，仅换外壳中性色。
+ * ═══════════════════════════════════════════════════════════════════ */
+
+:root {
+  /* ── VS Code Dark+ 设计令牌 ── */
+  --vscode-bg:            #1e1e1e;   /* editor / terminal 底色 */
+  --vscode-fg:            #d4d4d4;   /* 主前景 */
+  --vscode-fg-dim:        #9d9d9d;   /* 弱化前景 */
+  --vscode-fg-faint:      #6e6e6e;   /* 更弱前景 */
+  --vscode-titlebar:      #3c3c3c;   /* 标题栏 */
+  --vscode-sidebar:       #252526;   /* 侧边栏 */
+  --vscode-sidebar-fg:    #cccccc;   /* 侧边栏前景 */
+  --vscode-activitybar:   #333333;   /* 活动栏 */
+  --vscode-tab-inactive:  #2d2d2d;   /* 未激活 tab */
+  --vscode-tab-active:    #1e1e1e;   /* 激活 tab */
+  --vscode-statusbar:     #007acc;   /* 状态栏（VS Code 标志蓝） */
+  --vscode-statusbar-fg:  #ffffff;
+  --vscode-input:         #3c3c3c;
+  --vscode-input-fg:      #cccccc;
+  --vscode-button:        #0e639c;   /* 主按钮 */
+  --vscode-button-hover:  #1177bb;
+  --vscode-border:        #3c3c3c;
+  --vscode-border-subtle: #252526;
+  --vscode-focus:         #007fd4;   /* 聚焦描边 */
+  --vscode-selection:     #264f78;   /* 选中 */
+  --vscode-list-hover:    #2a2d2e;
+  --vscode-list-active:   #094771;
+  --vscode-scrollbar:     #424242;
+  --vscode-widget-shadow: rgba(0,0,0,.36);
+  --vscode-hover-alpha:   rgba(255,255,255,.10);
+  --vscode-active-alpha:  rgba(255,255,255,.16);
+  --vscode-font: "Segoe UI", system-ui, -apple-system, "PingFang SC",
+                 "Microsoft YaHei", sans-serif;
+}
+
+/* ── 全局 ── */
+body {
+  background: var(--vscode-bg);
+  color: var(--vscode-fg);
+  font-family: var(--vscode-font);
+}
+
+/* 滚动条对齐 VS Code */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--vscode-scrollbar);
+  border: 2px solid transparent;
+  background-clip: content-box;
+  border-radius: 5px;
+}
+::-webkit-scrollbar-corner { background: transparent; }
+
+/* 聚焦描边统一 VS Code 蓝 */
+:focus-visible {
+  outline: 1px solid var(--vscode-focus);
+  outline-offset: -1px;
+}
+
+/* ══════════ Title Bar — VS Code 深色标题栏 ══════════ */
+
+.titlebar {
+  background: var(--vscode-titlebar);
+  border-bottom: 1px solid var(--vscode-border-subtle);
+  height: 36px;
+}
+
+.titlebar-filename {
+  color: var(--vscode-fg-dim);
+}
+
+.titlebar-btn {
+  background: transparent;
+  color: var(--vscode-fg);
+}
+
+.titlebar-btn:hover {
+  background: var(--vscode-hover-alpha);
+  color: var(--vscode-fg);
+}
+
+.titlebar-btn:active {
+  background: var(--vscode-active-alpha);
+}
+
+#sidebarToggle.on .sb-left,
+#rightPanelToggle.on .sb-right {
+  fill: var(--vscode-fg);
+}
+
+/* ══════════ Content / Sidebar — VS Code 侧栏 ══════════ */
+
+.content {
+  background: var(--vscode-bg);
+}
+
+.sidebar {
+  background: var(--vscode-sidebar);
+  border-right: 1px solid var(--vscode-border);
+  color: var(--vscode-sidebar-fg);
+}
+
+.sidebar-right {
+  border-right: none;
+  border-left: 1px solid var(--vscode-border);
+}
+
+/* 侧边栏内文本弱化到 VS Code 前景 */
+.sidebar,
+.sidebar * {
+  color-scheme: dark;
+}
+
+/* ══════════ Terminal Panel — 对齐编辑器底色 ══════════ */
+
+.term-panel {
+  /* 去掉暖色渐变边缘，纯 #1e1e1e，与 VS Code 终端一致 */
+  background: var(--vscode-bg);
+  box-shadow: inset 0 1px 4px rgba(0,0,0,.2);
+}
+
+.term-empty {
+  background: var(--vscode-bg);
+}
+
+.term-empty .empty-orb {
+  background: linear-gradient(135deg, rgba(0,122,204,0.14) 0%, rgba(14,99,156,0.08) 100%);
+  border: 1px solid rgba(0,122,204,0.25);
+  box-shadow: 0 0 20px rgba(0,122,204,0.10);
+}
+
+.term-empty .empty-orb:hover {
+  box-shadow: 0 0 30px rgba(0,122,204,0.18);
+  border-color: rgba(0,122,204,0.40);
+}
+
+.empty-title { color: var(--vscode-fg); }
+.empty-subtitle { color: var(--vscode-fg-dim); }
+
+/* 空状态按钮 → VS Code 按钮（蓝主 / 中性次） */
+.empty-btn {
+  font: 600 13px/1 var(--vscode-font);
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.14);
+  color: var(--vscode-fg);
+  border-radius: 4px;
+  padding: 8px 18px;
+  backdrop-filter: none;
+}
+
+.empty-btn:hover {
+  background: rgba(255,255,255,0.10);
+  border-color: rgba(255,255,255,0.20);
+}
+
+.empty-btn.primary {
+  background: var(--vscode-button);
+  border-color: var(--vscode-button);
+  color: #ffffff;
+}
+
+.empty-btn.primary:hover {
+  background: var(--vscode-button-hover);
+  border-color: var(--vscode-button-hover);
+}
+
+/* ══════════ Status Bar — VS Code 标志蓝 ══════════ */
+
+.statusbar {
+  background: var(--vscode-statusbar);
+  border-top: 1px solid rgba(0,0,0,.25);
+  color: var(--vscode-statusbar-fg);
+  height: 22px;
+  padding: 0 12px;
+}
+
+.statusbar-item {
+  color: var(--vscode-statusbar-fg);
+}
+
+.statusbar-dot {
+  background: #8bc34a;   /* VS Code 绿点（语义 ok，蓝底上更清晰） */
+  box-shadow: 0 0 4px rgba(139,195,74,.4);
+}
+
+.ribbon-warn {
+  color: #fff3b0;   /* 蓝底上最亮琥珀，接近 AA */
+}
+
+.ribbon-backend {
+  background: rgba(255,255,255,0.15);
+  border: 1px solid rgba(255,255,255,0.25);
+  color: var(--vscode-statusbar-fg);
+}
+
+.ribbon-backend-dot {
+  background: #8bc34a;
+  box-shadow: 0 0 3px rgba(139,195,74,.4);
+}
+
+.ribbon-model {
+  color: rgba(255,255,255,0.8);
+}
+
+/* M1 模型芯片：蓝底上的浅色胶囊 */
+.ribbon-provider-chip {
+  background: rgba(255,255,255,0.15);
+  border: 1px solid rgba(255,255,255,0.30);
+  color: var(--vscode-statusbar-fg);
+}
+
+.ribbon-provider-chip:hover {
+  border-color: rgba(255,255,255,0.55);
+  color: #ffffff;
+  background: rgba(255,255,255,0.22);
+}
+
+.ribbon-provider-chip svg { color: #ffffff; }
+
+.ribbon-provider-chip.switching {
+  color: rgba(255,255,255,0.75);
+}
+
+.ribbon-provider-chip.unconfigured {
+  border-style: dashed;
+  border-color: #ffe08a;
+  color: #ffe08a;
+  background: rgba(255,224,138,0.12);
+}
+
+.statusbar-kbd {
+  background: rgba(255,255,255,0.12);
+  border: 1px solid rgba(255,255,255,0.2);
+  color: rgba(255,255,255,0.85);
+}
+
+/* ══════════ Command Palette — VS Code 深色命令面板 ══════════ */
+
+.palette-overlay {
+  background: rgba(0,0,0,0.45);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+}
+
+.palette {
+  background: var(--vscode-sidebar);
+  border: 1px solid var(--vscode-border);
+  border-radius: 6px;
+  box-shadow: 0 8px 32px var(--vscode-widget-shadow);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+.palette-search {
+  border-bottom: 1px solid var(--vscode-border);
+}
+
+.palette-input {
+  background: var(--vscode-input);
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--vscode-input-fg);
+}
+
+.palette-input:focus {
+  border-color: var(--vscode-focus);
+  box-shadow: none;
+}
+
+.palette-input::placeholder { color: var(--vscode-fg-faint); }
+
+.palette-group-label {
+  color: var(--vscode-fg-faint);
+}
+
+.palette-item {
+  height: 32px;
+  padding: 0 16px;
+}
+
+.palette-item:hover,
+.palette-item.sel {
+  background: var(--vscode-list-active);
+}
+
+.palette-item-label {
+  color: var(--vscode-fg);
+}
+
+/* palette-item 内的辅助文本色兜底 */
+.palette-item-kbd,
+.palette-item-detail {
+  color: var(--vscode-fg-dim);
+}
+
+/* ══════════ 其他外壳控件兜底 ══════════ */
+
+/* 右键菜单 / 上下文菜单对齐 VS Code */
+.ctx-menu {
+  background: var(--vscode-sidebar);
+  border: 1px solid var(--vscode-border);
+  border-radius: 6px;
+  box-shadow: 0 8px 32px var(--vscode-widget-shadow);
+}
+
+.ctx-menu-item:hover {
+  background: var(--vscode-list-hover);
+}
+
+.ctx-menu-sep {
+  background: var(--vscode-border);
+}
+
+/* ══════════ 对话框（F2 切换模型 + 新建项目） — VS Code 深色对话框 ══════════ */
+
+.np-overlay {
+  background: rgba(0,0,0,0.45);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+}
+
+.np-dialog {
+  background: var(--vscode-sidebar);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  border: 1px solid var(--vscode-border);
+  border-radius: 8px;
+  box-shadow: 0 8px 32px var(--vscode-widget-shadow);
+  color: var(--vscode-fg);
+}
+
+.np-title { color: var(--vscode-fg); }
+
+.np-close { color: var(--vscode-fg-dim); }
+.np-close:hover { background: var(--vscode-list-hover); color: var(--vscode-fg); }
+
+.np-label { color: var(--vscode-fg-faint); }
+.np-optional { color: var(--vscode-fg-dim); }
+
+.np-input {
+  background: var(--vscode-input);
+  border: 1px solid var(--vscode-border);
+  color: var(--vscode-input-fg);
+}
+.np-input:focus {
+  border-color: var(--vscode-focus);
+  box-shadow: 0 0 0 1px var(--vscode-focus);
+}
+.np-input::placeholder { color: var(--vscode-fg-faint); }
+
+/* 下拉：保留 VS Code 深色，箭头换浅色描边 */
+.np-select {
+  background-color: var(--vscode-input);
+  border: 1px solid var(--vscode-border);
+  color: var(--vscode-input-fg);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M3 5l3 3 3-3' stroke='%23C8C8C8' stroke-width='1.2' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+.np-select:focus {
+  border-color: var(--vscode-focus);
+  box-shadow: 0 0 0 1px var(--vscode-focus);
+}
+.np-select option {
+  color: var(--vscode-input-fg);
+  background: var(--vscode-input);
+}
+
+.np-browse-btn {
+  background: var(--vscode-input);
+  border: 1px solid var(--vscode-border);
+  color: var(--vscode-fg-dim);
+}
+.np-browse-btn:hover { background: var(--vscode-list-hover); color: var(--vscode-fg); }
+
+.np-footer { border-top: 1px solid var(--vscode-border); }
+.np-btn { border-color: var(--vscode-border); }
+
+.np-btn-cancel {
+  background: rgba(255,255,255,0.06);
+  color: var(--vscode-fg);
+}
+.np-btn-cancel:hover { background: rgba(255,255,255,0.10); color: #ffffff; }
+
+.np-btn-confirm {
+  background: var(--vscode-button);
+  border-color: var(--vscode-button);
+  color: #ffffff;
+}
+.np-btn-confirm:hover {
+  background: var(--vscode-button-hover);
+  border-color: var(--vscode-button-hover);
+}
+.np-btn-confirm:disabled { opacity: 0.4; }
+
+.np-hint { color: var(--vscode-fg-dim); }
+
+/* ── F2 供应商列表 ── */
+.ps-item:hover { background: var(--vscode-list-hover); }
+.ps-item.sel {
+  background: var(--vscode-list-active);
+  border-color: rgba(0,122,204,0.45);
+}
+.ps-item-check { color: #4fc1ff; }
+.ps-item-main { color: var(--vscode-fg); }
+.ps-item-sub { color: var(--vscode-fg-dim); }
+.ps-item-kbd { color: #4fc1ff; }
+
+.ps-footer { border-top: 1px solid var(--vscode-border); }
+.ps-hint { color: var(--vscode-fg-faint); }
+
+.ps-btn {
+  background: rgba(255,255,255,0.06);
+  border: 1px solid var(--vscode-border);
+  color: var(--vscode-fg);
+}
+.ps-btn:hover { border-color: var(--vscode-fg-dim); color: #ffffff; }
+.ps-btn-primary {
+  background: var(--vscode-button);
+  border-color: var(--vscode-button);
+  color: #ffffff;
+}
+.ps-btn-primary:hover {
+  background: var(--vscode-button-hover);
+  border-color: var(--vscode-button-hover);
+  color: #ffffff;
+}
+.ps-btn-ghost { background: transparent; }
+
+.ps-confirm-text { color: var(--vscode-fg); }
+.ps-confirm-sub { color: var(--vscode-fg-dim); }
+
+.ps-provider-row {
+  background: rgba(255,255,255,0.04);
+  border: 1px solid var(--vscode-border);
+}
+.ps-provider-name { color: var(--vscode-fg); }
+.ps-provider-sub { color: var(--vscode-fg-dim); }
+.ps-status-text { color: var(--vscode-fg-dim); }
+.ps-manage-hint { color: var(--vscode-fg-faint); }
+
+/* 状态点保留语义色（蓝底/深底上提高对比） */
+.ps-status-dot.using {
+  background: #8bc34a;
+  box-shadow: 0 0 4px rgba(139,195,74,.4);
+}
+.ps-status-dot.ok { background: #4fc1ff; }
