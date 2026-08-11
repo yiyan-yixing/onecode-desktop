@@ -451,3 +451,258 @@ body {
   box-shadow: 0 0 4px rgba(139,195,74,.4);
 }
 .ps-status-dot.ok { background: #4fc1ff; }
+
+/* ══════════ 修复：终端顶部间隔 + 侧边栏条目深色化 ══════════ */
+
+/* 1) 终端面板：去掉顶部 12px 间隙（标题栏下方不再露 #1e1e1e 空条），
+      同时去掉先前加的 inset 阴影（避免标题栏与终端之间出现深色接缝） */
+.term-panel {
+  box-shadow: none;
+}
+.term-viewport,
+.term-instance {
+  padding: 0;   /* 去掉上下左右全部内边距：终端内容贴满面板 */
+}
+
+/* 2) 侧边栏条目：文本转浅色（VS Code 侧栏前景），选中/悬停用 VS Code 深色列表高亮 */
+
+/* —— 项目标签页 —— */
+.orbi-tabs {
+  border-bottom: 1px solid var(--vscode-border);
+}
+.orbi-tab {
+  color: var(--vscode-fg-dim);
+}
+.orbi-tab:hover {
+  background: var(--vscode-list-hover);
+  color: var(--vscode-fg);
+}
+.orbi-tab.active {
+  background: var(--vscode-sidebar);
+  color: var(--vscode-fg);
+}
+.orbi-tab.active::after {
+  background: var(--vscode-focus);
+}
+
+/* —— 项目卡片 —— */
+.project-card:hover {
+  background: var(--vscode-list-hover);
+  box-shadow: none;
+}
+.project-card:active {
+  background: var(--vscode-list-active);
+}
+.project-card.active {
+  background: var(--vscode-list-active);
+  border-left-color: var(--vscode-focus);
+}
+.project-card.active .project-name {
+  color: #ffffff;
+}
+.project-name {
+  color: var(--vscode-sidebar-fg);
+}
+.project-dir {
+  color: var(--vscode-fg-dim);
+}
+.project-empty {
+  color: var(--vscode-fg-dim);
+}
+.project-count {
+  background: rgba(255,255,255,0.06);
+  border-color: var(--vscode-border);
+  color: var(--vscode-fg-dim);
+}
+.project-count.has {
+  color: #4fc1ff;
+  background: rgba(0,122,204,0.14);
+  border-color: rgba(0,122,204,0.3);
+}
+.project-count.exited {
+  color: #f87171;
+  background: rgba(239,68,68,0.10);
+  border-color: rgba(239,68,68,0.2);
+}
+.project-more {
+  color: var(--vscode-fg-dim);
+}
+.project-more:hover {
+  background: var(--vscode-list-hover);
+  color: var(--vscode-fg);
+}
+
+/* —— 终端 orb 行 —— */
+.orb:hover {
+  background: var(--vscode-list-hover);
+}
+.orb.active {
+  background: var(--vscode-list-active);
+  box-shadow: 0 0 0 1px rgba(0,122,204,0.4);
+}
+.orb-label {
+  color: var(--vscode-sidebar-fg);
+}
+.orb.active .orb-label {
+  color: #ffffff;
+}
+.orb.exited .orb-label {
+  color: var(--vscode-fg-dim);
+}
+.orb-cwd {
+  color: var(--vscode-fg-dim);
+}
+
+/* —— 分节标签 —— */
+.orbital-section {
+  color: var(--vscode-fg-dim);
+}
+.orbital-section:hover {
+  color: var(--vscode-fg);
+}
+
+/* —— agents 标签页 —— */
+.al-item {
+  color: var(--vscode-sidebar-fg);
+}
+.al-item:hover {
+  background: var(--vscode-list-hover);
+}
+.al-item:active {
+  background: var(--vscode-list-active);
+}
+.al-name {
+  color: var(--vscode-fg);
+}
+.al-desc {
+  color: var(--vscode-fg-dim);
+}
+.al-item:hover::after {
+  color: #4fc1ff;
+}
+
+/* —— 侧边栏滚动条对齐 VS Code —— */
+.orbital-tab-content::-webkit-scrollbar-thumb,
+.al-list::-webkit-scrollbar-thumb {
+  background: var(--vscode-scrollbar);
+}
+.orbital-tab-content::-webkit-scrollbar-thumb:hover,
+.al-list::-webkit-scrollbar-thumb:hover {
+  background: var(--vscode-fg-dim);
+}
+
+/* ══════════ 右侧边栏（文件面板）— 文字色对齐左侧边栏 ══════════ */
+
+/* —— 工具栏 / 面包屑 —— */
+.fe-toolbar {
+  border-bottom: 1px solid var(--vscode-border);
+}
+.fe-breadcrumb {
+  color: var(--vscode-fg-dim);
+}
+.fe-bcr-seg:hover {
+  background: var(--vscode-list-hover);
+  color: var(--vscode-fg);
+}
+.fe-bcr-seg.fe-bcr-cur {
+  color: var(--vscode-fg);
+}
+.fe-bcr-sep {
+  color: var(--vscode-fg-faint);
+}
+.fe-refresh-btn {
+  color: var(--vscode-fg-dim);
+}
+.fe-refresh-btn:hover {
+  background: var(--vscode-list-hover);
+  color: var(--vscode-fg);
+}
+
+/* —— 文件树 —— */
+.fe-item {
+  color: var(--vscode-sidebar-fg);
+}
+.fe-item:hover {
+  background: var(--vscode-list-hover);
+}
+.fe-item:active {
+  background: var(--vscode-list-active);
+}
+.fe-item[data-is-dir="1"] .fe-name {
+  color: var(--vscode-fg);
+}
+.fe-item-up .fe-name {
+  color: var(--vscode-fg-dim);
+}
+.fe-size {
+  color: var(--vscode-fg-dim);
+}
+
+/* —— 空 / 加载 / 错误 —— */
+.fe-loading,
+.fe-empty,
+.fe-bin {
+  color: var(--vscode-fg-dim);
+}
+.fe-error {
+  color: #f87171;
+}
+
+/* —— 滚动条 —— */
+.fe-tree::-webkit-scrollbar-thumb {
+  background: var(--vscode-scrollbar);
+}
+.fe-tree::-webkit-scrollbar-thumb:hover {
+  background: var(--vscode-fg-dim);
+}
+
+/* —— 文件预览（对齐 VS Code 深色 Markdown 预览） —— */
+.fe-preview {
+  background: var(--vscode-bg);
+}
+.fe-md {
+  color: var(--vscode-fg);
+}
+.fe-md h1,
+.fe-md h2,
+.fe-md h3,
+.fe-md h4 {
+  color: var(--vscode-fg);
+  border-bottom-color: var(--vscode-border);
+}
+.fe-md h5 { color: var(--vscode-fg-dim); }
+.fe-md h6 { color: var(--vscode-fg-faint); }
+.fe-md a {
+  color: #4fc1ff;
+}
+.fe-md blockquote {
+  background: rgba(255,255,255,0.04);
+  border-left-color: var(--vscode-focus);
+  color: var(--vscode-fg-dim);
+}
+.fe-md :not(pre) > code {
+  background: rgba(255,255,255,0.08);
+  color: #e6a23c;
+}
+.fe-md table {
+  border-color: var(--vscode-border);
+}
+.fe-md th,
+.fe-md td {
+  border-color: var(--vscode-border);
+}
+.fe-md tr:nth-child(even) {
+  background: rgba(255,255,255,0.03);
+}
+.fe-md hr {
+  border-color: var(--vscode-border);
+}
+.fe-copy-btn {
+  background: var(--vscode-input);
+  border-color: var(--vscode-border);
+  color: var(--vscode-fg-dim);
+}
+.fe-copy-btn:hover {
+  background: var(--vscode-list-hover);
+  color: var(--vscode-fg);
+}
