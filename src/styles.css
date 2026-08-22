@@ -2911,6 +2911,8 @@ body::before {
 .ps-form { width: 460px; }
 .ps-field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 9px; }
 .ps-field label { font: 500 10px/1 var(--font-ui); color: var(--tx-warm4); text-transform: uppercase; letter-spacing: .5px; }
+.ps-field .ps-field-hint { font: 400 10px/1.4 var(--font-ui); color: var(--tx-warm4); text-transform: none; letter-spacing: 0; opacity: .8; }
+.ps-input.ps-extra { resize: vertical; min-height: 72px; font: 11px/1.5 var(--font-mono); white-space: pre; }
 .ps-input {
   padding: 7px 10px;
   border-radius: 7px;

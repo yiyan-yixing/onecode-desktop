@@ -256,12 +256,18 @@ impl TerminalSlot {
         master.as_ref().and_then(|m| m.get_size().ok())
     }
 
-    /// 终止子进程（SIGTERM 由 portable-pty 处理）。
+    /// 终止子进程及其整棵进程树。
+    /// 顺序讲究：先快照进程树、再发信号——若 shell 先被 SIGTERM，孙代会被
+    /// launchd 立即重挂（ppid=1），快照就追不到它们了（2026-08-22 孤儿 claude 实证）。
     pub fn kill(&self) -> std::io::Result<()> {
+        let root = *recover_lock!(self.pid.lock(), "pid");
+        let victims = root.map(super::snapshot_tree).unwrap_or_default();
         let mut killer = recover_lock!(self.child_killer.lock(), "child_killer");
         if let Some(k) = killer.as_mut() {
             k.kill().map_err(|e| std::io::Error::other(e.to_string()))?;
         }
+        // 连根拔起：shell 的孙代（claude 等）不留孤儿
+        super::sweep_tree(&victims);
         Ok(())
     }
 

@@ -243,6 +243,14 @@ impl MultiPtyManager {
                 _ => {}
             }
         }
+        // 供应商附加环境变量（DeepSeek 官方推荐配置等）→ 覆盖默认注入值；
+        // AUTH_TOKEN 优先：存在时丢弃 API_KEY 避免 auth 冲突。
+        for (k, v) in &config.extra_env {
+            env.insert(k.clone(), v.clone());
+        }
+        if env.contains_key("ANTHROPIC_AUTH_TOKEN") {
+            env.remove("ANTHROPIC_API_KEY");
+        }
         *recover_lock!(slot.env.lock(), "env") = env;
         Ok(())
     }
@@ -441,6 +449,67 @@ impl MultiPtyManager {
     }
 }
 
+/// 快照以 root 为根的整棵进程树（含 root）。
+/// 用 /bin/ps 一次拉全表构建 ppid→children 映射再 BFS——macOS 无 /proc，逐目录遍历不可行。
+/// ps 失败时返回空（调用方降级为只杀直接子进程）。
+fn snapshot_tree(root: u32) -> Vec<u32> {
+    let Ok(output) = std::process::Command::new("/bin/ps")
+        .args(["-axo", "pid=,ppid="])
+        .output()
+    else {
+        return Vec::new();
+    };
+    let text = String::from_utf8_lossy(&output.stdout);
+    let mut children: HashMap<u32, Vec<u32>> = HashMap::new();
+    for line in text.lines() {
+        let mut it = line.split_whitespace();
+        let (Some(pid), Some(ppid)) = (
+            it.next().and_then(|s| s.parse::<u32>().ok()),
+            it.next().and_then(|s| s.parse::<u32>().ok()),
+        ) else {
+            continue;
+        };
+        children.entry(ppid).or_default().push(pid);
+    }
+    let mut victims = Vec::new();
+    let mut stack = vec![root];
+    while let Some(pid) = stack.pop() {
+        victims.push(pid);
+        if let Some(kids) = children.get(&pid) {
+            stack.extend_from_slice(kids);
+        }
+    }
+    victims
+}
+
+/// 对整棵进程树执行 SIGTERM → 100ms → SIGKILL 双段清扫（退出/关闭终端专用）。
+/// 只 SIGTERM 直接子进程的教训：shell 先死，孙代（claude/node/…）被 launchd
+/// 收养成孤儿继续跑——「退出 OneCode 后 claude 还在」的根因（2026-08-22 实证）。
+fn sweep_tree(victims: &[u32]) {
+    if victims.is_empty() {
+        return;
+    }
+    let self_pid = std::process::id();
+    let targets: Vec<u32> = victims
+        .iter()
+        .copied()
+        .filter(|p| *p > 1 && *p != self_pid)
+        .collect();
+    if targets.is_empty() {
+        return;
+    }
+    // 礼貌 SIGTERM，给 shell/claude 100ms 自行退出，再 SIGKILL 兜底防僵尸/赖活
+    let _ = std::process::Command::new("/bin/kill")
+        .args(targets.iter().map(u32::to_string))
+        .status();
+    std::thread::sleep(Duration::from_millis(100));
+    let _ = std::process::Command::new("/bin/kill")
+        .arg("-9")
+        .args(targets.iter().map(u32::to_string))
+        .status();
+    log::info!("[pty] sweep_tree: SIGTERM→SIGKILL {} processes", targets.len());
+}
+
 fn summary_of(s: &Arc<TerminalSlot>) -> SlotSummary {
     SlotSummary {
         id: s.id.to_string(),
@@ -457,18 +526,17 @@ fn summary_of(s: &Arc<TerminalSlot>) -> SlotSummary {
 
 // ── Claude Code auth 冲突修复 ────────────────────────────────────────
 
-/// 从 `~/.claude/settings.json` 的 `env` 节中移除 `ANTHROPIC_AUTH_TOKEN`。
+/// 从隔离配置目录 `{CLAUDE_CONFIG_DIR}/settings.json` 的 `env` 节中移除
+/// `ANTHROPIC_AUTH_TOKEN`。
 ///
 /// Claude Code 启动时会读取此文件的 `env` 节并注入到进程环境中。
 /// 如果同时存在 `ANTHROPIC_API_KEY`（Wizard/Settings 配置）和 `ANTHROPIC_AUTH_TOKEN`，
 /// Anthropic SDK 会报 auth 冲突警告。
 /// 幂等操作：仅在 AUTH_TOKEN 存在时才写入文件，已移除则跳过。
+/// 全局隔离：只碰 onecode 专属的隔离配置目录（与 create_pty 的 CLAUDE_CONFIG_DIR
+/// 一致），绝不读写用户全局 `~/.claude/settings.json`。
 fn remove_auth_token_from_settings() {
-    let home = match std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")) {
-        Ok(h) => h,
-        Err(_) => return,
-    };
-    let path = std::path::PathBuf::from(&home).join(".claude/settings.json");
+    let path = crate::providers::cc_config_dir().join("settings.json");
     if !path.exists() {
         return;
     }
@@ -555,11 +623,50 @@ fn create_pty(
         cb.env(k, v);
     }
 
+    // 全局隔离（董事长 2026-08-22 指令：onecode 不改全局、不读全局 ~/.claude）。
+    // 两层防线：
+    // 1. CLAUDE_CONFIG_DIR → 状态隔离：onecode 的 claude 把 settings/transcripts/
+    //    projects 全部读写到专属目录 ~/.onecode/cc-config，不经手用户全局
+    //    ~/.claude（后者仍可能被当作 project 源发现，见下方注释 2 的兜底）。
+    // 2. CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST=1 → 路由权威：声明「宿主托管
+    //    provider」，Claude Code 忽略任何 settings 文件（managed/project/user）
+    //    里的 ANTHROPIC_BASE_URL / API_KEY / MODEL 类变量，以进程 env 为准。
+    //    这保证切档后实际走激活供应商，全局 ~/.claude/settings.json 的 env
+    //    （哪怕被 project 发现机制带进来）也无法覆盖。
+    // 其它后端（codex 等）忽略这两个变量，无副作用。
+    cb.env(
+        "CLAUDE_CONFIG_DIR",
+        &crate::providers::cc_config_dir().to_string_lossy().to_string(),
+    );
+    cb.env("CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST", "1");
+    // 关掉 Claude Code 向 Anthropic 官方发的非必要流量（feature flags/用量上报）。
+    // 否则国内访问 api.anthropic.com 报 "Unable to connect to Anthropic services:
+    // Status 403"——那不是模型请求失败（模型走第三方供应商是通的），是这些非必要
+    // 上报被墙。所有供应商一律关掉（onecode 内嵌 claude 永不连官方端点）。
+    cb.env("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1");
+    // 自定义模型名（DeepSeek/Bailian/GLM 等）claude 不认识时会强行套 200k 上下文窗口
+    // 并打印警告 "is not a model this version of Claude Code recognizes ... auto-compact
+    // will keep this session within 200k tokens"。第三方模型名进不了 claude 的模型表，
+    // 统一关掉这个未知模型窗口强执行，让上下文窗口以 API 实际返回为准（2026-08-22
+    // 实测：交互终端内警告完全消失，请求不受影响）。
+    cb.env("CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT", "1");
+    // 登录/首次引导防线（官方文档，见 claude-code-guide 核查）：
+    // - DISABLE_LOGIN_COMMAND=1：隐藏 /login 命令（官方为"外部 API key 认证"场景设计）；
+    // - IS_DEMO=1：跳过首次 onboarding 引导、隐藏 email/org 显示；
+    // - CLAUDE_CODE_SKIP_FAST_MODE_NETWORK_ERRORS=1：跳过 fast-mode 对 api.anthropic.com
+    //   的网络探测（国内 403 的另一来源）。
+    // 组合效果：onecode 内嵌 claude 永不触发浏览器 OAuth 登录、永不连官方端点。
+    cb.env("DISABLE_LOGIN_COMMAND", "1");
+    cb.env("IS_DEMO", "1");
+    cb.env("CLAUDE_CODE_SKIP_FAST_MODE_NETWORK_ERRORS", "1");
+
     // 若子进程环境中同时存在 ANTHROPIC_API_KEY 和 ANTHROPIC_AUTH_TOKEN，
     // Claude Code 会报 auth 冲突警告。策略：保留 API_KEY，移除 AUTH_TOKEN。
     //
     // AUTH_TOKEN 来源有三层（按优先级从高到低）：
-    // 1. ~/.claude/settings.json "env" 节 — Claude Code 启动时读取并注入（最常见）
+    // 1. 隔离配置目录 {CLAUDE_CONFIG_DIR}/settings.json "env" 节 — onecode 专属，
+    //    Claude Code 启动时读取并注入（最常见；全局 ~/.claude 已被 CLAUDE_CONFIG_DIR
+    //    隔离，不经手）
     // 2. macOS Keychain（claude /login 存入的 OAuth token）
     // 3. 进程环境变量（继承自父进程 shell）
     //
@@ -567,10 +674,11 @@ fn create_pty(
     if cb.get_env("ANTHROPIC_API_KEY").is_some() {
         // 第3层：移除进程环境变量中的 AUTH_TOKEN
         cb.env_remove("ANTHROPIC_AUTH_TOKEN");
-        // 第2层：空字符串覆盖 keychain 的 OAuth token
-        cb.env("CLAUDE_CODE_OAUTH_TOKEN", "");
-        // 第1层：从 settings.json 的 env 节中移除 AUTH_TOKEN
+        // 第1层：从隔离配置目录的 settings.json env 节移除 AUTH_TOKEN
         remove_auth_token_from_settings();
+        // 第2层（keychain 的陈旧 OAuth token）不再设空串占位——统一由下方 guard
+        // 之后的非空 CLAUDE_CODE_OAUTH_TOKEN 注入覆盖（见「状态栏登录态」注释）。
+        // 空串会让 claude 判定未登录，状态栏误显 "Not logged in · Run /login"。
     }
 
     // OneCode Desktop 进程常被从一个已运行的 Claude Code 会话中拉起
@@ -590,6 +698,68 @@ fn create_pty(
         "CLAUDE_CODE_SSE_PORT",
     ] {
         cb.env_remove(marker);
+    }
+
+    // 防 Claude Code 登录陷阱（董事长 2026-08-22）：
+    // claude 启动时若既无 API Key 也无 Auth Token，会尝试 first-party OAuth 登录
+    // → 连接 api.anthropic.com → 国内直接 403 "Claude Code 在您所在地区不可用"。
+    // onecode 内嵌 claude **永不登录 Claude Code、永不连官方端点**：缺 creds 或
+    // base_url 指向 Anthropic 官方（默认值）就报错不拉起，终端显示清晰提示，
+    // 引导去设置/供应商面板配置第三方 Base URL + API Key。
+    // 只对 claude 后端生效（cmd 以 claude 结尾；codex/opencode 用各自变量不受影响）。
+    let is_claude = cmd.ends_with("claude");
+    if is_claude {
+        let key_ok = cb
+            .get_env("ANTHROPIC_API_KEY")
+            .map(|k| !k.is_empty())
+            .unwrap_or(false);
+        let token_ok = cb
+            .get_env("ANTHROPIC_AUTH_TOKEN")
+            .map(|k| !k.is_empty())
+            .unwrap_or(false);
+        let oauth_ok = cb
+            .get_env("CLAUDE_CODE_OAUTH_TOKEN")
+            .map(|k| !k.is_empty())
+            .unwrap_or(false);
+        let base_url = cb
+            .get_env("ANTHROPIC_BASE_URL")
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        // 指向第三方供应商端点（非 Anthropic 官方）才有意义；空/官方端点=登录陷阱
+        let third_party = !base_url.is_empty() && !base_url.starts_with("https://api.anthropic.com");
+        if !key_ok && !token_ok && !oauth_ok {
+            return Err(anyhow!(
+                "未配置 API Key：请先在「设置 / 供应商」面板配置可用的 Base URL + API Key。\
+                 onecode 内嵌 Claude Code 不支持登录（国内无法访问 api.anthropic.com）"
+            ));
+        }
+        if !third_party && !token_ok && !oauth_ok {
+            return Err(anyhow!(
+                "Base URL 未指向第三方供应商（当前为 Anthropic 官方端点，国内不可用）。\
+                 请在「设置 / 供应商」面板配置第三方 Base URL + API Key"
+            ));
+        }
+    }
+
+    // 状态栏登录态（2026-08-22 实测修复）：claude 的 "Not logged in · Run /login"
+    // 反映的是 OAuth 账号态而非 API key 可用性——请求走第三方 API key 完全正常，
+    // 但状态栏仍显示 Not logged in，误导用户以为未配置认证。填一个**非空**
+    // CLAUDE_CODE_OAUTH_TOKEN（用当前生效的 key/token 值）即可让 claude 判定
+    // 已登录：纯显示层，实测与 ANTHROPIC_API_KEY 共存不冲突、不影响路由
+    // （请求仍按 SDK 优先级走 x-api-key / Bearer）。
+    // 注意：
+    // - 必须放在上面的登录陷阱 guard **之后**——guard 用 oauth_ok 判断是否放行
+    //   官方端点，提前注入非空值会绕开该防线；
+    // - 不能写进隔离 settings.json env——CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST=1
+    //   会忽略 settings 文件里的 provider/auth 变量，只能走进程 env（此处）。
+    // 非空值同时覆盖 macOS Keychain 里的陈旧 OAuth token（原「第2层空串」的活）。
+    let display_token = cb
+        .get_env("ANTHROPIC_API_KEY")
+        .or_else(|| cb.get_env("ANTHROPIC_AUTH_TOKEN"))
+        .map(|v| v.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    if !display_token.is_empty() {
+        cb.env("CLAUDE_CODE_OAUTH_TOKEN", &display_token);
     }
 
     // portable-pty 0.8：spawn_command 在 **slave** 上（不是 master.spawn(slave, cb)）。

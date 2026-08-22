@@ -17,7 +17,6 @@ mod session;
 mod tray;
 mod wizard;
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use tauri::Manager;
@@ -69,12 +68,13 @@ pub fn run() {
             // P0-1 修复：不再 manage 冻结的 Arc<AppConfig>。pty_spawn / pty_refresh_env
             // 改从 ConfigManager 的 Arc<RwLock<AppConfig>> 读当前值，切档即时生效。
 
-            // CC Status 缓存
-            let global_dir = std::env::var("HOME")
-                .map(|h| PathBuf::from(h).join(".claude"))
-                .unwrap_or_else(|_| PathBuf::from(".claude"));
-            app.manage(CcStatusCache::new(global_dir.clone()));
-            app.manage(CcSessionsCache::new(global_dir));
+            // CC Status 缓存 —— 全局隔离（董事长 2026-08-22）：只读 onecode 专属
+            // 隔离配置目录（CLAUDE_CONFIG_DIR 同源），不读用户全局 ~/.claude。
+            // claude 子进程的状态/会话本就写在隔离目录（CLAUDE_CONFIG_DIR 重定位），
+            // 指这里才能看到 onecode 自己拉起的会话。
+            let cc_cfg_dir = crate::providers::cc_config_dir();
+            app.manage(CcStatusCache::new(cc_cfg_dir.clone()));
+            app.manage(CcSessionsCache::new(cc_cfg_dir));
 
             // 会话存储
             match app.path().app_data_dir() {
@@ -164,6 +164,16 @@ pub fn run() {
             commands::pty_refresh_env,
         ])
         .on_menu_event(crate::menu::on_menu_event)
-        .run(tauri::generate_context!())
-        .expect("failed to run OneCode Desktop");
+        .build(tauri::generate_context!())
+        .expect("failed to build OneCode Desktop")
+        .run(|app, event| {
+            // Dock 右键「退出」等系统级退出路径不经过 tray/menu 的 quit_app，
+            // 在此兜底杀光所有 PTY 进程树，防 claude 等子进程成孤儿。
+            // quit_app 路径会二次触发（slots 已清空 → no-op，幂等）。
+            if let tauri::RunEvent::ExitRequested { .. } = event {
+                if let Some(mgr) = app.try_state::<MultiPtyManager>() {
+                    mgr.kill_all_blocking();
+                }
+            }
+        });
 }

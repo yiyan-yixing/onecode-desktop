@@ -78,6 +78,15 @@ pub async fn pty_spawn(
             _ => {}
         }
     }
+    // 供应商附加环境变量（DeepSeek 官方推荐配置等）→ 覆盖上面的默认注入值
+    for (k, v) in &config.extra_env {
+        env.insert(k.clone(), v.clone());
+    }
+    // AUTH_TOKEN 优先级：extra_env 显式声明 ANTHROPIC_AUTH_TOKEN 时丢弃 API_KEY，
+    // 避免 claude 报 auth 冲突（DeepSeek 官方推荐 AUTH_TOKEN 模式）。
+    if env.contains_key("ANTHROPIC_AUTH_TOKEN") {
+        env.remove("ANTHROPIC_API_KEY");
+    }
     log::info!("[pty_spawn] backend={effective_backend} cmd={cmd:?} args={args:?} cwd={cwd:?} project_id={project_id:?} cols={cols:?} rows={rows:?}");
     let (id, pid) = state
         .spawn(

@@ -121,6 +121,7 @@ pub async fn save_wizard_config(
         api_key: Some(config.api_key),
         base_url: Some(config.base_url),
         model: Some(config.model),
+        extra_env: None,
         wizard_completed: Some(true),
         default_backend: Some(config.backend),
         active_provider_id: None,

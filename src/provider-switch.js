@@ -25,6 +25,22 @@ function esc(s) {
   }[c]));
 }
 
+/** extra_env 对象 ↔ 「KEY=VALUE 每行」文本互转（前端表单编辑用） */
+function envLinesToObj(s) {
+  const o = {};
+  for (const line of String(s || '').split('\n')) {
+    const t = line.trim();
+    if (!t || t.startsWith('#')) continue;
+    const i = t.indexOf('=');
+    if (i > 0) o[t.slice(0, i).trim()] = t.slice(i + 1).trim();
+  }
+  return o;
+}
+function objToEnvLines(o) {
+  if (!o) return '';
+  return Object.entries(o).map(([k, v]) => `${k}=${v}`).join('\n');
+}
+
 /** 简易 toast（复用现有 .health-warn 类似的浮层，直接 append 到 body） */
 let _toastStack = [];
 function toast(msg, kind = 'ok', ms = 3200) {
@@ -460,6 +476,8 @@ export class ModelSwitchController {
             `<input class="ps-input ps-key" type="password" value="" placeholder="${isEdit ? '不修改请留空' : 'sk-…'}" autocomplete="off"></div>` +
           `<div class="ps-field"><label>型号</label>` +
             `<input class="ps-input ps-model" type="text" value="${esc(editing?.model || '')}" placeholder="deepseek-v4-flash" autocomplete="off"></div>` +
+          `<div class="ps-field"><label>额外环境变量 <span class="ps-field-hint">每行 KEY=VALUE（DeepSeek 官方推荐：SUBAGENT_MODEL / EFFORT_LEVEL / AUTO_COMPACT_WINDOW 等）</span></label>` +
+            `<textarea class="ps-input ps-extra" rows="4" placeholder="CLAUDE_CODE_SUBAGENT_MODEL=deepseek-v4-flash&#10;CLAUDE_CODE_AUTO_COMPACT_WINDOW=786432" autocomplete="off" spellcheck="false">${esc(objToEnvLines(editing?.extra_env))}</textarea></div>` +
           `<div class="ps-form-actions">` +
             `<button class="ps-btn ps-btn-ghost ps-test-btn" type="button">测试连接</button>` +
             `<div class="ps-form-right">` +
@@ -475,6 +493,7 @@ export class ModelSwitchController {
       const urlEl = overlay.querySelector('.ps-url');
       const keyEl = overlay.querySelector('.ps-key');
       const modelEl = overlay.querySelector('.ps-model');
+      const extraEl = overlay.querySelector('.ps-extra');
       const presetEl = overlay.querySelector('.ps-preset');
       const saveBtn = overlay.querySelector('.ps-save');
 
@@ -484,6 +503,7 @@ export class ModelSwitchController {
           if (!pr) return;
           urlEl.value = pr.base_url;
           modelEl.value = pr.model;
+          if (extraEl) extraEl.value = objToEnvLines(pr.extra_env);
           if (!nameEl.value || nameEl.value === urlEl.dataset.prevName) {
             nameEl.value = pr.name;
             urlEl.dataset.prevName = pr.name;
@@ -529,6 +549,7 @@ export class ModelSwitchController {
           base_url: urlEl.value.trim(),
           api_key: keyEl.value.trim(),
           model: modelEl.value.trim(),
+          extra_env: envLinesToObj(extraEl ? extraEl.value : ''),
         };
         if (!payload.name || !payload.base_url || !payload.model) {
           toast('名称 / Base URL / 型号不能为空', 'err');
@@ -542,6 +563,9 @@ export class ModelSwitchController {
             // 仅当用户填了新 key 才更新（留空 = 不修改，避免把旧 key 回传）
             if (payload.api_key && payload.api_key !== editing.api_key) updates.api_key = payload.api_key;
             if (payload.model !== editing.model) updates.model = payload.model;
+            if (payload.extra_env && JSON.stringify(payload.extra_env) !== JSON.stringify(editing.extra_env || {})) {
+              updates.extra_env = payload.extra_env;
+            }
             await ipc.providersUpdate(editing.id, updates);
             toast('已保存', 'ok');
           } else {

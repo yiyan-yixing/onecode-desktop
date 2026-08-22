@@ -2,6 +2,7 @@
 //!
 //! M1 用默认值；M2+ 从配置文件读取，前端可通过 Settings 面板修改。
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -32,6 +33,9 @@ pub struct AppConfig {
     /// AI 模型标识
     #[serde(default = "default_model")]
     pub model: String,
+    /// 供应商附加环境变量（DeepSeek 官方推荐配置等；KEY=VALUE，随 spawn 注入子进程）
+    #[serde(default)]
+    pub extra_env: HashMap<String, String>,
     /// Setup Wizard 是否已完成
     #[serde(default)]
     pub wizard_completed: bool,
@@ -71,6 +75,7 @@ impl Default for AppConfig {
             default_cwd,
             max_terminals: 30,
             ring_buffer_max_mb: 10,
+            extra_env: HashMap::new(),
             api_key: String::new(),
             base_url: default_base_url(),
             model: default_model(),
@@ -157,6 +162,7 @@ pub struct ConfigUpdate {
     pub api_key: Option<String>,
     pub base_url: Option<String>,
     pub model: Option<String>,
+    pub extra_env: Option<HashMap<String, String>>,
     pub wizard_completed: Option<bool>,
     pub default_backend: Option<String>,
     /// 外 Option = 是否提供该字段；内 Option = 值（None 表示清除 provider 指针）
@@ -189,6 +195,9 @@ impl ConfigUpdate {
         }
         if let Some(v) = &self.model {
             cfg.model = v.clone();
+        }
+        if let Some(v) = &self.extra_env {
+            cfg.extra_env = v.clone();
         }
         if let Some(v) = &self.wizard_completed {
             cfg.wizard_completed = *v;
