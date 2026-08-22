@@ -74,7 +74,9 @@ install: release
 	@echo ">>> 安装到 /Applications..."
 	-hdiutil detach "/Volumes/OneCode" 2>/dev/null || true
 	-hdiutil detach "/Volumes/OneCode Desktop" 2>/dev/null || true
-	DMG="$$(ls -d "$(ROOT)/target/release/bundle/dmg/"*.dmg 2>/dev/null | head -1)"; \
+	# npx tauri build 产物落在 $(TAURI_DIR)/target/（tauri.conf.json 所在目录），
+	# 根目录 target/ 下可能是旧版本遗留的陈旧 DMG —— 装错会装到旧二进制
+	DMG="$$(ls -d "$(TAURI_DIR)/target/release/bundle/dmg/"*.dmg 2>/dev/null | head -1)"; \
 	if [ -z "$$DMG" ]; then echo "错误: 未找到 DMG 文件"; exit 1; fi; \
 	echo ">>> 挂载 $$DMG ..."; \
 	hdiutil attach "$$DMG" -nobrowse -mountpoint "/Volumes/OneCode" || exit 1; \
