@@ -36,6 +36,7 @@ const MANAGED_PROVIDER_ENV_KEYS: &[&str] = &[
     "CLAUDE_CODE_SUBAGENT_MODEL",
     "CLAUDE_CODE_EFFORT_LEVEL",
     "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
+    "CLAUDE_CODE_MAX_CONTEXT_TOKENS",
     "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
 ];
 
@@ -91,8 +92,22 @@ pub struct Provider {
     /// 供应商附加环境变量（DeepSeek 官方推荐配置；随 spawn 注入 + 同步隔离 settings）
     #[serde(default)]
     pub extra_env: HashMap<String, String>,
+    /// 模型上下文窗口（token）。**可选**：不填就按型号后缀 / 内置表 / 保守默认推导
+    /// （见 `model_context`）。留一个可填的口子是因为「内置表不可能覆盖所有第三方型号」，
+    /// 而窗口填错的代价是两个方向都不好受：偏高 → provider 400；偏低 → 压缩得太早。
+    #[serde(default)]
+    pub context_window: Option<u32>,
     #[serde(default)]
     pub created_at: String,
+}
+
+impl Provider {
+    /// 这个供应商实际生效的窗口与压缩阈值。**算出来的，不落盘**——
+    /// 落盘就会和型号/覆盖值脱节（同一个坑：`pipeline` 每次整份重写产物，
+    /// 缓存的值迟早是旧的）。
+    pub fn window_plan(&self) -> crate::model_context::WindowPlan {
+        crate::model_context::resolve(&self.model, self.context_window)
+    }
 }
 
 /// 切换历史事件
@@ -156,6 +171,39 @@ impl Default for ProviderCatalog {
             failover_params: FailoverParams::default(),
             history: vec![],
             active_provider_id: None,
+        }
+    }
+}
+
+/// 给界面的目录视图：目录本体 + **每个供应商算出来的窗口/压缩阈值**。
+///
+/// 为什么把窗口放进列表（而不是让前端自己算）：窗口来自型号后缀 + 内置表 +
+/// 用户覆盖值三处叠加，前端复制一份口径必然漂移（`providers.rs` 与
+/// `provider-switch.js` 之间已经有过一次「两边都以为对方在清理」的教训）。
+/// `#[serde(flatten)]` 让 JSON 形状与原来完全兼容——前端现有代码不用改。
+#[derive(Debug, Serialize)]
+pub struct ProviderCatalogView {
+    #[serde(flatten)]
+    pub catalog: ProviderCatalog,
+    /// provider_id → 窗口计划（用户不认识这个数字的来源就没法判断对不对）
+    pub windows: HashMap<String, crate::model_context::WindowPlan>,
+    /// provider_id → 来源说明（中文，界面直接用）
+    pub window_sources: HashMap<String, &'static str>,
+}
+
+impl ProviderCatalogView {
+    pub fn from_catalog(catalog: ProviderCatalog) -> Self {
+        let mut windows = HashMap::new();
+        let mut window_sources = HashMap::new();
+        for p in &catalog.providers {
+            let plan = p.window_plan();
+            windows.insert(p.id.clone(), plan);
+            window_sources.insert(p.id.clone(), crate::model_context::source_label(plan.source));
+        }
+        Self {
+            catalog,
+            windows,
+            window_sources,
         }
     }
 }
@@ -241,6 +289,7 @@ pub async fn add_provider(store: &ProviderStore, input: ProviderInput) -> Result
         api_key: input.api_key.trim().to_string(),
         model: input.model.trim().to_string(),
         extra_env: input.extra_env.clone().unwrap_or_default(),
+        context_window: input.context_window.filter(|w| *w > 0),
         created_at: chrono::Utc::now().to_rfc3339(),
     };
     if provider.name.is_empty() || provider.base_url.is_empty() || provider.model.is_empty() {
@@ -296,6 +345,11 @@ pub async fn update_provider(
     }
     if let Some(extra_env) = &updates.extra_env {
         p.extra_env = extra_env.clone();
+    }
+    if let Some(window) = updates.context_window {
+        // Some(None) = 清空回自动推导；0 / 明显不合理的值当清空处理，
+        // 别让它把窗口压成 1（那会让每次请求都触发压缩）
+        p.context_window = window.filter(|w| *w >= 8_192);
     }
     let updated = p.clone(); // iter_mut 借用结束前快照（须在再次借用 cat 前结束可变借用）
     let was_active = cat.active_provider_id.clone();
@@ -475,6 +529,35 @@ pub fn sync_active_to_claude_settings(p: &Provider) -> Result<(), String> {
     ] {
         env_obj.insert(k.to_string(), serde_json::Value::String(p.model.clone()));
     }
+
+    // ── 声明模型真实窗口（2026-09-23 两起 400 的根因）────────────────
+    //
+    // 不声明的后果：Claude Code 按「未识别型号」的默认值办事，会话一路涨过
+    // provider 的上限才撞墙。实测：qwen3.8-27b（真窗口 262144）会话涨到 392074。
+    // CLI 自己的提示就是「set CLAUDE_CODE_MAX_CONTEXT_TOKENS to its real window」。
+    //
+    // 放在 extra_env 合并**之前**：用户若显式填了这个 key，以他填的为准
+    //（他可能有我们不知道的信息，比如走的是代理或私有部署）。
+    // 一方模型（Claude 系）**不声明**：CLI 的 `auto` 比我们的内置表准，
+    // 插一杠子的唯一效果是把窗口调小。见 `model_context::is_first_party`。
+    let plan = p.window_plan();
+    let declare = !crate::model_context::is_first_party(&p.model, &p.base_url);
+    if declare && !p.extra_env.contains_key("CLAUDE_CODE_MAX_CONTEXT_TOKENS") {
+        env_obj.insert(
+            "CLAUDE_CODE_MAX_CONTEXT_TOKENS".into(),
+            serde_json::Value::String(plan.window.to_string()),
+        );
+    }
+    if declare && plan.source == "default" {
+        // 未识别型号：值是我们保守估的，**必须让它可被看见**——
+        // 只写日志不够，界面要显示（见 `ProviderCatalogView::windows`）。
+        log::warn!(
+            "[providers] {} 的型号 {} 未识别，窗口按保守值 {} 处理（可在供应商里手填）",
+            p.id,
+            p.model,
+            plan.window
+        );
+    }
     // 供应商附加环境变量（DeepSeek 官方推荐：subagent/effort/compact-window/模型差异化），
     // 最后合并 → 覆盖上面的默认（例如 DEFAULT_HAIKU_MODEL=flash、主模型差异化）。
     for (k, v) in &p.extra_env {
@@ -503,6 +586,34 @@ pub fn sync_active_to_claude_settings(p: &Provider) -> Result<(), String> {
         "theme".to_string(),
         serde_json::Value::String("dark".to_string()),
     );
+
+    // ── 自动压缩阈值 ────────────────────────────────────────────────
+    //
+    // **写 settings 键而不是环境变量**，两个原因：
+    // ① CLI 对两者的关系是「环境变量优先，设了它就盖住设置项，并且在 /config 里
+    //    提示『CLAUDE_CODE_AUTO_COMPACT_WINDOW is set and takes precedence』」——
+    //    我们写设置项，用户在 /config 里还能自己调；写环境变量就把那个入口锁死了。
+    // ② 设置项在界面上是可见的（来源显示「from settings」），出问题查得到。
+    //
+    // 阈值 = 窗口 − 补全预算 − 安全余量（见 model_context 模块头：provider 校验的是
+    // 「输入 + 补全 ≤ 窗口」，只按输入算照样 400）。
+    // 用户在 extra_env 里显式设了环境变量时**不写**——写了也不会生效（env 优先），
+    // 留着只会让 /config 里出现「被环境变量盖住」的困惑提示。
+    // 一方模型同样不写（理由见上面 `declare`）。
+    if declare {
+        if p.extra_env.contains_key("CLAUDE_CODE_AUTO_COMPACT_WINDOW") {
+            // 用户显式指定了阈值（env 优先于设置项）→ 清掉我们上次可能写下的键，
+            // 否则 settings 里会留一个**不生效**的值，看起来像配置漂移。
+            root.remove("autoCompactWindow");
+        } else {
+            root.insert(
+                "autoCompactWindow".to_string(),
+                serde_json::Value::Number(plan.compact.into()),
+            );
+        }
+    } else {
+        root.remove("autoCompactWindow"); // 切回一方模型：交还给 CLI 的 auto
+    }
 
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("create dir failed: {e}"))?;
@@ -719,7 +830,12 @@ pub async fn test_connection(provider: &Provider) -> TestConnectionResult {
 
 // ── 输入结构（Tauri command 反序列化）────────────────────────────────
 
-/// 新增供应商输入（预设或自定义四要素）
+/// 新增供应商输入（预设或自定义四要素）。
+///
+/// PRD 原先裁「上下文窗口等高级字段不做」（O3，触发条件是「有真实用户提诉求」）。
+/// **触发条件已达成**：2026-09-23 董事长本人撞了两次 provider 400（上下文溢出），
+/// 所以窗口从「不做」变成「可选填」——四要素流程不变，不填就按
+/// 型号后缀 / 内置表 / 保守默认自动推导（见 `model_context`）。
 #[derive(Debug, Deserialize)]
 pub struct ProviderInput {
     pub name: String,
@@ -729,6 +845,9 @@ pub struct ProviderInput {
     /// 附加环境变量（KEY=VALUE）；缺省 None = 空
     #[serde(default)]
     pub extra_env: Option<HashMap<String, String>>,
+    /// 模型上下文窗口（token）；缺省 None = 自动推导
+    #[serde(default)]
+    pub context_window: Option<u32>,
 }
 
 /// 编辑供应商输入（仅覆盖提供的字段）
@@ -739,6 +858,21 @@ pub struct ProviderUpdate {
     pub api_key: Option<String>,
     pub model: Option<String>,
     pub extra_env: Option<HashMap<String, String>>,
+    /// `Some(None)` = 显式清空（回到自动推导）；`None` = 不改。
+    /// 用双层 Option 是必须的——单层分不出「不改」和「清空」，
+    /// 同一类坑在素材库那边见过（「我就是要它空」≠「我没改过」）。
+    #[serde(default, deserialize_with = "double_option")]
+    pub context_window: Option<Option<u32>>,
+}
+
+/// 双层 Option 反序列化：`{"context_window": null}` → `Some(None)`（清空），
+/// 字段缺席 → `None`（不动）。serde 默认把两者都变成 `None`。
+fn double_option<'de, D, T>(de: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::Deserialize<'de>,
+{
+    Ok(Some(Option::<T>::deserialize(de)?))
 }
 
 /// 生成 slug id（自定义供应商用）
@@ -778,6 +912,7 @@ mod tests {
                     api_key: "sk-a".into(),
                     model: "glm-5.2".into(),
                     extra_env: HashMap::new(),
+                    context_window: None,
                     created_at: "2026-08-08T00:00:00Z".into(),
                 },
                 Provider {
@@ -787,6 +922,7 @@ mod tests {
                     api_key: "".into(),
                     model: "deepseek-v4-flash".into(),
                     extra_env: HashMap::new(),
+                    context_window: None,
                     created_at: "2026-08-08T00:00:00Z".into(),
                 },
             ],
@@ -864,8 +1000,10 @@ mod tests {
     }
 
     /// 用临时 HOME 验证隔离 settings.json 落地。
-    /// 注意：HOME 是进程全局 env，本测试必须唯一地改它（其它 lib 测试都不读 HOME），
-    /// 且两个场景串在同一个测试里，避免并行测试互相覆盖 HOME。
+    ///
+    /// **所有场景必须串在这一个测试里**：HOME 是进程全局 env，`cc_config_dir()`
+    /// 每次调用都读它，而 cargo test 并行跑用例——分成两个 `#[test]` 会互相踩
+    /// （实测踩过：一个用例断言窗口是 262144、另一个刚把 HOME 换掉）。
     #[test]
     fn sync_active_writes_recommended_env() {
         let orig_home = std::env::var("HOME").unwrap_or_default();
@@ -880,6 +1018,7 @@ mod tests {
             base_url: "https://api.deepseek.com/anthropic".into(),
             api_key: "sk-test".into(),
             model: "deepseek-v4-pro[1m]".into(),
+            context_window: None,
             extra_env: HashMap::from([
                 ("ANTHROPIC_DEFAULT_OPUS_MODEL".into(), "deepseek-v4-pro[1m]".into()),
                 ("ANTHROPIC_DEFAULT_SONNET_MODEL".into(), "deepseek-v4-pro[1m]".into()),
@@ -903,6 +1042,15 @@ mod tests {
         assert_eq!(env["ANTHROPIC_DEFAULT_OPUS_MODEL"], "deepseek-v4-pro[1m]");
         assert_eq!(env["CLAUDE_CODE_SUBAGENT_MODEL"], "deepseek-v4-flash");
         assert_eq!(env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"], "786432");
+        // 声明了模型真实窗口（`[1m]` 后缀 → 1048576）。不声明就是 2026-09-23 那两起 400：
+        // Claude Code 按「未识别型号」的默认值办事，会话一路涨过 provider 的上限才撞墙。
+        assert_eq!(env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"], "1048576");
+        // 用户 extra_env 里显式给了 AUTO_COMPACT_WINDOW（env 优先于设置项）→
+        // 不再写 settings 键，免得 /config 里出现「被环境变量盖住」的困惑提示
+        assert!(
+            v.get("autoCompactWindow").is_none(),
+            "extra_env 已显式指定窗口时不写 settings 键"
+        );
 
         // 场景 B：extra_env 显式声明 AUTH_TOKEN → 不写 API_KEY（避免 auth 冲突）
         let p = Provider {
@@ -911,6 +1059,7 @@ mod tests {
             base_url: "https://x.test/anthropic".into(),
             api_key: "sk-a".into(),
             model: "m1".into(),
+            context_window: None,
             extra_env: HashMap::from([("ANTHROPIC_AUTH_TOKEN".into(), "tok-1".into())]),
             created_at: String::new(),
         };
@@ -920,8 +1069,96 @@ mod tests {
         assert!(!env.contains_key("ANTHROPIC_API_KEY"));
         assert_eq!(env["ANTHROPIC_AUTH_TOKEN"], "tok-1");
 
+        // ── 场景 C：**2026-09-23 第一起 400 的回归** ─────────────────────
+        //
+        // 阿里百炼的 `qwen3.8-27b`：真窗口 262144，但供应商条目 `extra_env` 为空
+        // （是「自定义新增」的，不是预设）→ 没声明窗口 → Claude Code 按「未识别型号」
+        // 的默认值办事 → 会话涨到 392074 → provider 400。
+        let bailian = Provider {
+            id: "provider-1787399285".into(),
+            name: "百炼".into(),
+            base_url: "https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic".into(),
+            api_key: "sk-sp-test".into(),
+            model: "qwen3.8-27b".into(),
+            extra_env: HashMap::new(), // ← 关键：正是出事的那一条
+            context_window: None,
+            created_at: String::new(),
+        };
+        super::sync_active_to_claude_settings(&bailian).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(
+            v["env"]["CLAUDE_CODE_MAX_CONTEXT_TOKENS"], "262144",
+            "没把模型真实窗口声明出去 —— 这就是那起 400 的根因"
+        );
+        // 阈值必须离窗口足够远：实测单轮就能暴涨 23 万 token（阈值检查在上一轮之后）。
+        // 这里钉**精确值**——离线脚本（provider 配置的批处理/排查）会照这个数复刻，
+        // 差一位就悄悄退回 400。
+        let compact = v["autoCompactWindow"].as_u64().unwrap();
+        assert_eq!(compact, 151_501, "262144 - 32000(补全) - 65536(暴涨余量) - 13107(兜底)");
+
+        // ── 场景 D：切走之后声明必须跟着换（残留的窗口声明比不声明更糟）────
+        let flash = Provider {
+            id: "ds-flash".into(),
+            name: "DeepSeek-Flash".into(),
+            base_url: "https://api.deepseek.com/anthropic".into(),
+            api_key: "sk-a".into(),
+            model: "deepseek-v4-flash[1m]".into(),
+            extra_env: HashMap::new(),
+            context_window: None,
+            created_at: String::new(),
+        };
+        super::sync_active_to_claude_settings(&flash).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(v["env"]["CLAUDE_CODE_MAX_CONTEXT_TOKENS"], "1048576");
+        assert_eq!(
+            v["autoCompactWindow"].as_u64().unwrap(),
+            702_004,
+            "1048576 - 32000 - 262144 - 52428；这是 deepseek 那起 400 的修复值"
+        );
+
+        // ── 场景 E：用户手填的窗口优先（他可能有我们不知道的信息）────────
+        let mut manual = bailian.clone();
+        manual.context_window = Some(32_768);
+        super::sync_active_to_claude_settings(&manual).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(v["env"]["CLAUDE_CODE_MAX_CONTEXT_TOKENS"], "32768");
+
+        // ── 场景 F：一方模型（Claude 系）**什么都不声明** ────────────────
+        //
+        // CLI 的 `auto` 比自己维护一张表准；我们插手的唯一效果是把窗口调小
+        //（内置表里没有 Claude 型号 → 落到 128k 保守默认 → 200k 的模型被按 90k 压缩）。
+        let mut native = bailian.clone();
+        native.model = "claude-sonnet-5".into();
+        native.base_url = "https://api.anthropic.com".into();
+        super::sync_active_to_claude_settings(&native).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(
+            !v["env"].as_object().unwrap().contains_key("CLAUDE_CODE_MAX_CONTEXT_TOKENS"),
+            "对一方模型不该声明窗口（会把 auto 调好的值压小）"
+        );
+        assert!(v.get("autoCompactWindow").is_none(), "切回一方模型要清掉我们写的阈值");
+        // 走代理的 Claude 型号也一样（base_url 不是 anthropic.com，但型号名骗不了人）
+        native.base_url = "https://my-proxy.test/anthropic".into();
+        super::sync_active_to_claude_settings(&native).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(!v["env"].as_object().unwrap().contains_key("CLAUDE_CODE_MAX_CONTEXT_TOKENS"));
+
         let _ = std::fs::remove_dir_all(&tmp);
         std::env::set_var("HOME", &orig_home);
+    }
+
+    #[test]
+    fn catalog_view_carries_window_plans() {
+        // 界面靠这份数据把「窗口 / 阈值 / 来源」显示出来；
+        // 缺了它，用户看到的就是一个不知道哪来的数字
+        let view = ProviderCatalogView::from_catalog(catalog_with_two());
+        // JSON 形状必须向后兼容：providers 还在顶层（flatten）
+        let json = serde_json::to_value(&view).unwrap();
+        assert!(json["providers"].is_array());
+        assert_eq!(json["providers"].as_array().unwrap().len(), 2);
+        // glm-5.2 没有内置表条目 → 必须是 default，且来源写成中文给界面直接用
+        assert_eq!(view.windows["glm-5.2"].source, "default");
+        assert_eq!(view.window_sources["glm-5.2"], "未识别型号（保守值）");
     }
 
     #[test]

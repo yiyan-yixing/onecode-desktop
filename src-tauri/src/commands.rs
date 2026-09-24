@@ -735,9 +735,13 @@ fn spawn_editor(path: &str) -> Result<(), String> {
 
 /// 列出全部供应商 + 目录元数据（前端 F3 / 芯片渲染用）
 #[tauri::command]
-pub async fn providers_list(store: State<'_, ProviderStore>) -> Result<crate::providers::ProviderCatalog, String> {
+pub async fn providers_list(
+    store: State<'_, ProviderStore>,
+) -> Result<crate::providers::ProviderCatalogView, String> {
     let cat = store.arc().read().await.clone();
-    Ok(cat)
+    // 视图里多带一份「每个供应商算出来的窗口/压缩阈值」——界面要显示它，
+    // 用户才知道这个数字是哪来的（未识别型号时必须看得见）。
+    Ok(crate::providers::ProviderCatalogView::from_catalog(cat))
 }
 
 /// 列出两档预置供应商（新增时下拉带出默认 base_url + 型号）

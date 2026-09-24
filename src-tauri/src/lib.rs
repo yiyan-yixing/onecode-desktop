@@ -11,6 +11,7 @@ mod events;
 mod fs_explorer;
 mod keep_awake;
 mod menu;
+mod model_context;
 mod pty;
 mod providers;
 mod session;

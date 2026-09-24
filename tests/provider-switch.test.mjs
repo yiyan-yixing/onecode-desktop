@@ -717,8 +717,81 @@ describe('PS 写回 IPC 契约', () => {
 
     assert.equal(env.callsFor('providers_add').length, 1);
     assert.deepEqual(env.callsFor('providers_add')[0], {
-      provider: { name: 'DeepSeek', base_url: 'https://api.deepseek.com', api_key: 'sk-abc', model: 'deepseek-v4' },
+      provider: {
+        name: 'DeepSeek', base_url: 'https://api.deepseek.com', api_key: 'sk-abc', model: 'deepseek-v4',
+        // 表单里 extra_env 是个 textarea，空着就是 `{}`——原先这条期望漏了它，
+        // 于是「四要素」这个契约从 extra_env 落地那天起就一直是红的（没人发现）。
+        extra_env: {},
+      },
     });
+  });
+
+  test('PS-23b 正常：填了上下文窗口 → providers_add 带上 context_window（2026-09-23 两起 400 的修复）', async () => {
+    // 背景：供应商没声明模型窗口时，Claude Code 按「未识别型号」的默认值办事，
+    // 会话会一路涨过 provider 的真实上限 → 400。所以这个字段必须能传到后端。
+    const env = makeEnv();
+    const ctrl = env.ctrl;
+    ctrl.catalog = makeCatalog('A');
+    ctrl.tm = makeTabs([]);
+    env.setHandler('providers_presets', []);
+    env.setHandler('providers_add', { ok: true });
+    env.setHandler('providers_list', ctrl.catalog);
+
+    await ctrl.openManagement();
+    ctrl._overlay.querySelector('.ps-add')._emit('click', makeEvent(ctrl._overlay.querySelector('.ps-add')));
+    await flush();
+
+    const form = ctrl._overlay;
+    form.querySelector('.ps-name').value = '百炼';
+    form.querySelector('.ps-url').value = 'https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic';
+    form.querySelector('.ps-key').value = 'sk-sp';
+    form.querySelector('.ps-model').value = 'qwen3.8-27b';
+    form.querySelector('.ps-ctx').value = '262144';
+    form.querySelector('.ps-save')._emit('click', makeEvent(form.querySelector('.ps-save')));
+    await flush();
+
+    const sent = env.callsFor('providers_add').at(-1);
+    assert.equal(sent.provider.context_window, 262144);
+
+    // 留空 → **不带这个键**（后端据此走自动推导），而不是带 null。
+    // 注意 callsFor() 每次返回新数组，别想着清空它——认最后一次调用。
+    ctrl._overlay.querySelector('.ps-add')._emit('click', makeEvent(ctrl._overlay.querySelector('.ps-add')));
+    await flush();
+    const form2 = ctrl._overlay;
+    form2.querySelector('.ps-name').value = 'X';
+    form2.querySelector('.ps-url').value = 'https://x.test';
+    form2.querySelector('.ps-key').value = 'sk-x';
+    form2.querySelector('.ps-model').value = 'deepseek-v4-flash[1m]';
+    form2.querySelector('.ps-ctx').value = '';
+    form2.querySelector('.ps-save')._emit('click', makeEvent(form2.querySelector('.ps-save')));
+    await flush();
+    const second = env.callsFor('providers_add').at(-1);
+    assert.ok(!('context_window' in second.provider),
+      '留空时不该把 context_window 传过去');
+    assert.equal(second.provider.model, 'deepseek-v4-flash[1m]');
+  });
+
+  test('PS-23c 异常：窗口填了非法值 → 拦下来，不发请求', async () => {
+    const env = makeEnv();
+    const ctrl = env.ctrl;
+    ctrl.catalog = makeCatalog('A');
+    ctrl.tm = makeTabs([]);
+    env.setHandler('providers_presets', []);
+    env.setHandler('providers_add', { ok: true });
+    env.setHandler('providers_list', ctrl.catalog);
+
+    await ctrl.openManagement();
+    ctrl._overlay.querySelector('.ps-add')._emit('click', makeEvent(ctrl._overlay.querySelector('.ps-add')));
+    await flush();
+    const form = ctrl._overlay;
+    form.querySelector('.ps-name').value = 'X';
+    form.querySelector('.ps-url').value = 'https://x.test';
+    form.querySelector('.ps-key').value = 'sk-x';
+    form.querySelector('.ps-model').value = 'm';
+    form.querySelector('.ps-ctx').value = '100';   // 小于 8192：会把窗口压死
+    form.querySelector('.ps-save')._emit('click', makeEvent(form.querySelector('.ps-save')));
+    await flush();
+    assert.equal(env.callsFor('providers_add').length, 0, '非法窗口没拦住');
   });
 
   test('PS-24 正常：编辑 X 改 name、key 留空 → providers_update({id:X,updates:{name:NEW}})，不含 api_key', async () => {

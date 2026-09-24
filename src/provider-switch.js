@@ -25,6 +25,39 @@ function esc(s) {
   }[c]));
 }
 
+/** token 数 → 256K / 1M 这种一眼能读的形式 */
+function fmtTokens(n) {
+  if (!n) return '—';
+  if (n >= 1024 * 1024) {
+    const m = n / (1024 * 1024);
+    return (Number.isInteger(m) ? m : m.toFixed(1)) + 'M';
+  }
+  if (n >= 1024) return Math.round(n / 1024) + 'K';
+  return String(n);
+}
+
+/**
+ * 供应商行里的「窗口 · 压缩阈值 · 来源」。
+ *
+ * 为什么必须显示**来源**：这个数字是叠加推导出来的（用户手填 > 型号后缀 >
+ * 内置表 > 保守默认），用户不知道它是哪来的就没法判断对不对。
+ * `default` 是我们的估的保守值——必须显眼地标出来，因为偏小只会压缩得早，
+ * 偏大就会像 2026-09-23 那两起一样直接 400。
+ */
+function windowLine(cat, id) {
+  const w = (cat.windows || {})[id];
+  if (!w) return '';
+  const src = (cat.window_sources || {})[id] || '';
+  const unknown = w.source === 'default';
+  return (
+    `<div class="ps-provider-window${unknown ? ' warn' : ''}">` +
+      `上下文 ${fmtTokens(w.window)} · 压缩阈值 ${fmtTokens(w.compact)}` +
+      `<span class="ps-window-src">${esc(src)}</span>` +
+      (unknown ? '<span class="ps-window-warn">未识别型号，建议手填真实窗口</span>' : '') +
+    `</div>`
+  );
+}
+
 /** extra_env 对象 ↔ 「KEY=VALUE 每行」文本互转（前端表单编辑用） */
 function envLinesToObj(s) {
   const o = {};
@@ -345,6 +378,7 @@ export class ModelSwitchController {
           `<div class="ps-provider-info">` +
             `<div class="ps-provider-name">${esc(p.name)} ${isActive ? '<span class="ps-now">当前</span>' : ''}</div>` +
             `<div class="ps-provider-sub">${esc(p.model)} · ${esc(p.base_url)}</div>` +
+            windowLine(cat, p.id) +
           `</div>` +
           `<div class="ps-provider-status">${statusDot}</div>` +
           `<div class="ps-provider-actions">` +
@@ -476,6 +510,12 @@ export class ModelSwitchController {
             `<input class="ps-input ps-key" type="password" value="" placeholder="${isEdit ? '不修改请留空' : 'sk-…'}" autocomplete="off"></div>` +
           `<div class="ps-field"><label>型号</label>` +
             `<input class="ps-input ps-model" type="text" value="${esc(editing?.model || '')}" placeholder="deepseek-v4-flash" autocomplete="off"></div>` +
+          // 上下文窗口：留空 = 自动推导（型号后缀 > 内置表 > 保守默认）。
+          // 之所以要有个输入框：内置表不可能覆盖所有第三方型号，而**窗口填错的
+          // 两个方向都难受**——偏高 → provider 400（2026-09-23 董事长撞了两次），
+          // 偏低 → 压缩得太早、白花钱。
+          `<div class="ps-field"><label>上下文窗口 <span class="ps-field-hint">token，可留空自动推导（型号带 [1m]/[256k] 后缀也能认）</span></label>` +
+            `<input class="ps-input ps-ctx" type="number" min="8192" step="1024" value="${esc(editing?.context_window ?? '')}" placeholder="留空自动推导" autocomplete="off"></div>` +
           `<div class="ps-field"><label>额外环境变量 <span class="ps-field-hint">每行 KEY=VALUE（DeepSeek 官方推荐：SUBAGENT_MODEL / EFFORT_LEVEL / AUTO_COMPACT_WINDOW 等）</span></label>` +
             `<textarea class="ps-input ps-extra" rows="4" placeholder="CLAUDE_CODE_SUBAGENT_MODEL=deepseek-v4-flash&#10;CLAUDE_CODE_AUTO_COMPACT_WINDOW=786432" autocomplete="off" spellcheck="false">${esc(objToEnvLines(editing?.extra_env))}</textarea></div>` +
           `<div class="ps-form-actions">` +
@@ -494,6 +534,7 @@ export class ModelSwitchController {
       const keyEl = overlay.querySelector('.ps-key');
       const modelEl = overlay.querySelector('.ps-model');
       const extraEl = overlay.querySelector('.ps-extra');
+      const ctxEl = overlay.querySelector('.ps-ctx');
       const presetEl = overlay.querySelector('.ps-preset');
       const saveBtn = overlay.querySelector('.ps-save');
 
@@ -551,6 +592,14 @@ export class ModelSwitchController {
           model: modelEl.value.trim(),
           extra_env: envLinesToObj(extraEl ? extraEl.value : ''),
         };
+        // 窗口留空 = 不改（新增时后端自动推导）。填了才带上，且**清空要能表达**——
+        // 编辑时把数字删掉应该回到自动推导，而不是「保持原值」。
+        const ctxRaw = ctxEl ? ctxEl.value.trim() : '';
+        const ctxNum = ctxRaw ? Number(ctxRaw) : null;
+        if (ctxRaw && (!Number.isFinite(ctxNum) || ctxNum < 8192)) {
+          toast('上下文窗口至少 8192（或留空自动推导）', 'err');
+          return;
+        }
         if (!payload.name || !payload.base_url || !payload.model) {
           toast('名称 / Base URL / 型号不能为空', 'err');
           return;
@@ -566,10 +615,16 @@ export class ModelSwitchController {
             if (payload.extra_env && JSON.stringify(payload.extra_env) !== JSON.stringify(editing.extra_env || {})) {
               updates.extra_env = payload.extra_env;
             }
+            // 双层语义：清空 → null（回到自动推导）；填值 → 数字；没动 → 不带这个键
+            if (ctxNum !== (editing.context_window ?? null)) {
+              updates.context_window = ctxNum;
+            }
             await ipc.providersUpdate(editing.id, updates);
             toast('已保存', 'ok');
           } else {
-            await ipc.providersAdd(payload);
+            // 留空就**不带这个键**（不是带 null）：后端拿不到 = 自动推导，
+            // 而 payload 里塞 null 会让「四要素」这条最小路径凭空多一个字段
+            await ipc.providersAdd(ctxNum ? { ...payload, context_window: ctxNum } : payload);
             toast('已添加，可用 F2 切换', 'ok');
           }
           this._closeOverlay();
