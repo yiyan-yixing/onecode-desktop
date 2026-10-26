@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>工作台面板渲染夹具</title>
+<!--
+  渲染夹具：把「工作」页放进**真实的右栏结构**里跑，用来做两件上一刀没做的事：
+
+  1. **视觉实测**：截一张图看它到底长什么样（此前 12 轮从没渲染过 UI）；
+  2. **量化实测**：验证 `.fe-tab-content:not(.active){display:none}` 这条修复到底解不解决问题 ——
+     夹具会把「有修复」与「模拟修复前」两种情况下可见内容的高度量出来写进 DOM，
+     于是 headless Chrome `--dump-dom` 就能拿到数字，不必靠肉眼看图。
+
+  数据用**真实形状**（Rust 返回值的字段名一字不差），并刻意放进三种最容易骗过人的情况：
+  缺文件、证据没验过、agent 自报完成。
+-->
+<link rel="stylesheet" href="../../src/styles.css">
+<style>
+  /* 夹具专用：屏上并排两个面板，便于一张图看完 */
+  body { margin: 0; padding: 16px; background: #f6f2ec; font-family: -apple-system, sans-serif; }
+  .fx-row { display: flex; gap: 16px; align-items: flex-start; }
+  .fx-col { display: flex; flex-direction: column; gap: 6px; }
+  .fx-label { font: 700 11px/1.4 -apple-system, sans-serif; color: #6b5f52; }
+  /* 面板容器：照抄 .sidebar 的 flex 链，高度固定，便于比较 */
+  .fx-panel { display: flex; flex-direction: column; width: 300px; height: 720px;
+              background: #fbf8f4; border: 1px solid #e6ded4; overflow: hidden; }
+  /* 「修复前」：取消 display:none，回到基础规则的 visibility:hidden（仍占布局） */
+  .fx-nofix .fe-tab-content:not(.active) { display: flex !important; }
+</style>
+</head>
+<body>
+<h3 style="font:700 13px/1.4 -apple-system,sans-serif">工作台面板 · 渲染夹具</h3>
+<div class="fx-row">
+  <div class="fx-col">
+    <div class="fx-label">① 修复后（非激活页 display:none）</div>
+    <div class="fx-panel" id="panelOk">
+      <div class="fe-tabs">
+        <button class="fe-tab" data-tab="file">文件</button>
+        <button class="fe-tab active" data-tab="work">工作</button>
+      </div>
+      <div class="fe-tab-content" id="okFile"></div>
+      <div class="fe-tab-content active" id="okWork"></div>
+    </div>
+  </div>
+  <div class="fx-col">
+    <div class="fx-label">② 模拟修复前（visibility:hidden，仍占布局）</div>
+    <div class="fx-panel fx-nofix" id="panelNoFix">
+      <div class="fe-tabs">
+        <button class="fe-tab" data-tab="file">文件</button>
+        <button class="fe-tab active" data-tab="work">工作</button>
+      </div>
+      <div class="fe-tab-content" id="nfFile"></div>
+      <div class="fe-tab-content active" id="nfWork"></div>
+    </div>
+  </div>
+  <div class="fx-col">
+    <div class="fx-label">③ 空项目（未开终端 / 没有记录）</div>
+    <div class="fx-panel" id="panelEmpty">
+      <div class="fe-tabs"><button class="fe-tab active" data-tab="work">工作</button></div>
+      <div class="fe-tab-content active" id="emptyWork"></div>
+    </div>
+  </div>
+</div>
+<pre id="measure" style="margin-top:14px;font:12px/1.5 monospace;color:#333"></pre>
+
+<script type="module">
+import { WorkPanelController } from '../../src/work-panel.js';
+
+// 真实形状的假数据（字段名与 Rust 返回值一致）
+const deliverables = {
+  deliverables: [
+    { id: '2026-10-14-wechat-draft', title: '公众号排版成品', summary: '生成了文章 HTML 与封面图',
+      status: 'draft',
+      files: [ { path: 'out/article.html', exists: true, bytes: 12800 },
+               { path: 'out/cover.png', exists: false, bytes: null } ],
+      evidence: [ { kind: 'exec', grade: 'machine-runnable', detail: '可机器验证', command: 'node tools/check-layout.js out/article.html' },
+                  { kind: 'diff', grade: 'measured', detail: '可测量', command: null },
+                  { kind: 'self-report', grade: 'not-evidence', detail: '不是证据', command: null } ],
+      problem: '声明的文件不存在：out/cover.png',
+      verification: null },
+    { id: '2026-10-14-fixed-bug', title: '修掉 planMode 非法值', summary: '取值改成 plan 并加白名单校验',
+      status: 'draft',
+      files: [ { path: 'src-tauri/src/backend.rs', exists: true, bytes: 30000 } ],
+      evidence: [ { kind: 'exec', grade: 'machine-runnable', detail: '可机器验证', command: 'cargo test backend::' } ],
+      problem: null,
+      verification: { at: '2026-10-14T02:00:00Z',
+        results: [ { command: 'cargo test backend::', exit_code: 0, timed_out: false, duration_ms: 1140, output_tail: 'test result: ok. 25 passed' } ] } },
+    { id: '2026-10-13-old', title: '已接受的老产出', summary: '', status: 'accepted',
+      files: [], evidence: [], problem: null, verification: null },
+  ],
+};
+const tasks = {
+  tasks: [
+    { id: 'write-draft', title: '写一篇公众号稿', owner: 'wechat-publisher', status: 'doing',
+      status_source: 'declared', note: '面向技术读者，先出草稿',
+      problem: null,
+      deliverable_refs: [ { id: '2026-10-14-wechat-draft', exists: true, status: 'draft', verified: null } ],
+      unresolved_blockers: [] },
+    { id: 'self-done', title: 'agent 自己说干完了', owner: 'dev', status: 'done',
+      status_source: 'declared', note: '',
+      problem: '状态 done 来自任务文件本身（未经人裁决）',
+      deliverable_refs: [], unresolved_blockers: [] },
+    { id: 'blocked-one', title: '等上游数据', owner: '', status: 'blocked',
+      status_source: 'declared', note: '', problem: '有 1 个未解决的阻塞项',
+      deliverable_refs: [ { id: 'ghost-deliverable', exists: false, status: 'missing', verified: null } ],
+      unresolved_blockers: ['self-done'] },
+  ],
+};
+
+const noop = () => {};
+const fakeIpc = {
+  deliverablesScan: async () => deliverables,
+  taskList: async () => tasks,
+  deliverableReview: async () => 'accepted',
+  deliverableVerify: async () => null,
+  taskReview: async () => null,
+  ptyWrite: async () => {},
+};
+const fakeTm = { activeId: 't1', tabs: new Map([['t1', { id: 't1', cwd: '/p', isError: false }]]) };
+
+function mount(id) {
+  const c = new WorkPanelController({ ipc: fakeIpc, tabManager: fakeTm, sendTaskToSlot: noop, onNotice: noop });
+  c.init(document.getElementById(id));
+  return c;
+}
+mount('okWork'); mount('okFile');      // 文件页留空，模拟"另一页有内容但不该占位"
+mount('nfWork'); mount('nfFile');
+// 空项目：**只挂一次**（早先这里先 mount 了一次再 c2.init，两个 refresh 交叠，
+// 后返回的旧响应把空状态覆盖成了满内容 —— 夹具自己的竞态，得先修夹具才能测产品）
+const c2 = new WorkPanelController({ ipc: fakeIpc, tabManager: { activeId: null, tabs: new Map() }, sendTaskToSlot: noop, onNotice: noop });
+c2.init(document.getElementById('emptyWork'));
+
+// ── 量化：可见内容到底占多少高度 ──
+window.addEventListener('load', () => setTimeout(() => {
+  const h = (id) => Math.round(document.getElementById(id).getBoundingClientRect().height);
+  const panel = (id) => Math.round(document.getElementById(id).getBoundingClientRect().height);
+  const txt = (id) => document.getElementById(id).textContent || '';
+  const all = ['okWork', 'nfWork', 'emptyWork'].map(txt).join('\n');
+  const checks = [
+    ['LAYOUT_FIX', h('okWork') > h('nfWork') * 1.5, `可见内容高 ${h('okWork')} vs 修复前 ${h('nfWork')}（隐藏兄弟页 ${h('nfFile')}）`],
+    ['NO_LITERAL_MARKDOWN', !all.includes('**'), '页面文本里不该出现 markdown 星号'],
+    ['SELF_CLAIMED_VISIBLE', all.includes('agent 自报完成') && all.includes('自报完成待裁决'), 'agent 自报完成必须另立一组可见'],
+    ['EMPTY_STATE', txt('emptyWork').includes('没有活跃终端'), `空项目应提示先开终端，实际：「${txt('emptyWork').slice(0, 30)}」`],
+    ['REVIEW_QUEUE', all.includes('公众号排版成品') && !txt('okWork').includes('已接受的老产出'), '待验收队列口径'],
+    ['UNVERIFIED_MARKED', all.includes('未验证'), '未验证要标出来'],
+    ['SELF_CLAIMED_ORDER',
+      txt('okWork').indexOf('agent 自报完成') >= 0 &&
+        txt('okWork').indexOf('agent 自报完成') < txt('okWork').indexOf('产出 · 待验收'),
+      '自报完成要排在待验收队列之前（否则面板一长就被埋了）'],
+  ];
+  const lines = checks.map(([n, ok, why]) => `${ok ? 'PASS' : 'FAIL'}  ${n.padEnd(22)} ${why}`);
+  const failed = checks.filter(([, ok]) => !ok).length;
+  lines.push(failed === 0 ? 'RESULT: ALL_CHECKS_PASS' : `RESULT: ${failed}_CHECK(S)_FAILED`);
+  document.getElementById('measure').textContent = lines.join('\n');
+}, 120));
+</script>
+</body>
+</html>

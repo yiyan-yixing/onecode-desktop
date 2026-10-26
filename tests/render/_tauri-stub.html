@@ -1,0 +1,266 @@
+<script>
+// Tauri 桩：让真实 main.js 能在浏览器里跑起来，并记录它调了什么、有没有报错。
+(function () {
+  const log = [];
+  const invokes = [];
+  const answers = {
+    get_home_dir: '/tmp/home',
+    list_projects: [],
+    load_config: { default_backend: 'claude-code', default_cwd: '/tmp', base_url: '', api_key: '',
+                   model: '', extra_env: {}, active_provider_id: null },
+    session_restore: [],
+    list_backends: [],
+    engines_problems: [],
+    engines_config_path: '/tmp/engines.json',
+    providers_list: { providers: [], failover_queue: [], auto_failover_enabled: true,
+                      history: [], active_provider_id: null, roster: {},
+                      windows: {}, window_sources: {}, usable: {}, unusable_reason: {} },
+    providers_presets: [],
+    cc_sessions_list: [],
+    deliverables_scan: { cwd: '/tmp', git: { is_repo: false, branch: null, changes: [], error: 'n/a' },
+                         deliverables: [], unreadable: 0 },
+    task_list: { cwd: '/tmp', tasks: [], unreadable: 0 },
+    roster_list: [],
+    ledger_scan: null,
+    debug_log: null,
+    structured_open: {
+      id: 'ss-1', cwd: '/tmp/proj', agent: 'dev', provider_id: 'glm', model: 'glm-4-plus',
+      session_id: 'sess-aaaa-bbbb', engine_session_id: '', created_at: 't',
+      total_cost_usd: 0, total_input_tokens: 0, total_output_tokens: 0,
+      session_mismatch: false, turns: [],
+    },
+    structured_send: {
+      id: 'ss-1', cwd: '/tmp/proj', agent: 'dev', provider_id: 'glm', model: 'glm-4-plus',
+      session_id: 'sess-aaaa-bbbb', engine_session_id: 'sess-aaaa-bbbb', created_at: 't',
+      total_cost_usd: 0.174335, total_input_tokens: 34857, total_output_tokens: 2,
+      session_mismatch: false,
+      turns: [
+        { at: 't1', prompt: '写一段', reply: '写好了', ok: true, cost_usd: 0.174335,
+          input_tokens: 34857, output_tokens: 2, duration_ms: 1247,
+          session_id: 'sess-aaaa-bbbb', error: '' },
+        { at: 't2', prompt: '再改', reply: '', ok: false, cost_usd: 0,
+          input_tokens: 0, output_tokens: 0, duration_ms: 300,
+          session_id: '', error: '超时（300s）内没有 result 事件' },
+      ],
+    },
+    // 启动期降级：这条以前只进日志，界面上什么都看不到
+    startup_issues: [
+      { kind: 'session-store', message: 'attempt to write a readonly database',
+        impact: '终端列表与会话恢复不可用 —— 重启后可能看不到原有终端' },
+    ],
+    // ★ 一份**带全部诚实降级**的 spawn 结果：16 刀里做的那些提示，从没被渲染过
+    pty_spawn: {
+      id: 'tab-1', pid: 4242, agent: 'dev', agent_injected: false,
+      effective_provider: 'deepseek', effective_model: 'deepseek-v4-flash',
+      provider_fallback: true, route_source: 'roster',
+      switched_from: 'kimi',
+      switch_reason: 'kimi 没有凭据（api_key 与 extra_env 都是空的） → 已按撤退队列切到 deepseek',
+      posture: 'acceptEdits', posture_inferred: true,
+      allowed_tools: ['Read', 'Bash(git:*)'],
+      posture_note: null,
+      skills_loaded: ['alpha'], skills_missing: ['ghost-skill'], skills_deferred: [],
+    },
+  };
+  window.__bootLog = log;
+  window.__bootInvokes = invokes;
+
+  const push = (line) => log.push(line);
+  window.addEventListener('error', (e) => push('ERROR js: ' + (e.message || e.error)));
+  window.addEventListener('unhandledrejection', (e) => {
+    const r = e.reason;
+    push('UNHANDLED ' + (r && r.message ? r.message : String(r)));
+  });
+
+  class Channel {
+    constructor() { this.onmessage = null; }
+    toJSON() { return '__CHANNEL__'; }
+  }
+  window.__TAURI__ = {
+    core: {
+      Channel,
+      invoke: (cmd, args) => {
+        invokes.push(cmd);
+        if (cmd === 'pty_write') { window.__ptyWrites.push(args); return Promise.resolve(null); }
+        if (cmd === 'deliverables_scan') return Promise.resolve(window.__deliverables);
+        if (cmd === 'task_list') return Promise.resolve(window.__tasks);
+        if (Object.prototype.hasOwnProperty.call(answers, cmd)) {
+          return Promise.resolve(answers[cmd]);
+        }
+        // 未知命令：**拒绝**而不是抛同步错 —— ipc-bridge 的 safeInvoke 会兜住，
+        // 这样"某个命令没桩"不会被误报成 app 启动失败。
+        return Promise.reject(new Error('stub: no answer for ' + cmd));
+      },
+    },
+    event: { listen: () => Promise.resolve(() => {}) },
+    window: { getCurrentWindow: () => ({ listen: () => Promise.resolve(() => {}) }) },
+    dialog: { message: () => Promise.resolve(), ask: () => Promise.resolve(false) },
+  };
+
+  window.__ptyWrites = [];
+  window.__deliverables = {
+    cwd: '/tmp', git: { is_repo: false, branch: null, changes: [], error: 'not a repo' },
+    unreadable: 0,
+    deliverables: [
+      { id: 'd-pending', title: '公众号排版成品', summary: '生成了文章', status: 'draft',
+        files: [{ path: 'out/a.html', exists: true, bytes: 10 }, { path: 'out/b.png', exists: false, bytes: null }],
+        evidence: [{ kind: 'exec', grade: 'machine-runnable', detail: '可机器验证', command: 'true' },
+                   { kind: 'self-report', grade: 'not-evidence', detail: '不是证据', command: null }],
+        problem: '声明的文件不存在：out/b.png', verification: null },
+    ],
+  };
+  window.__tasks = {
+    cwd: '/tmp', unreadable: 0,
+    tasks: [
+      { id: 'write-draft', title: '写一篇稿', owner: 'dev', status: 'doing', status_source: 'declared',
+        note: '面向技术读者', provider_id: 'glm', model: 'glm-4-plus', problem: null,
+        deliverable_refs: [{ id: 'd-pending', exists: true, status: 'draft', verified: null }],
+        unresolved_blockers: [] },
+      { id: 'self-done', title: 'agent 自己说干完了', owner: 'dev', status: 'done',
+        status_source: 'declared', note: '', provider_id: '', model: '',
+        problem: '状态 done 来自任务文件本身（未经人裁决）',
+        deliverable_refs: [], unresolved_blockers: [] },
+    ],
+  };
+
+  // 读 xterm 缓冲：把终端里真实显示的文字取出来（这才是"用户看到了什么"）
+  function termText() {
+    try {
+      const tm = window.__onecode && window.__onecode.tabManager;
+      const st = tm && tm.activeId ? tm.tabs.get(tm.activeId) : null;
+      const t = st && st.term;
+      if (!t || !t.buffer) return '(没有终端缓冲)';
+      const b = t.buffer.active;
+      let out = '';
+      for (let i = 0; i < b.length; i++) {
+        const line = b.getLine(i);
+        if (line) out += line.translateToString(true) + '\n';
+      }
+      return out;
+    } catch (e) {
+      return '(读缓冲失败: ' + e + ')';
+    }
+  }
+
+  async function flowChecks() {
+    const checks = [];
+    const add = (name, ok, why) => checks.push([name, !!ok, why || '']);
+
+    // ① 派发一个员工（桩结果带全部诚实降级）
+    try {
+      await window.__onecode.tabManager.createTab({ projectId: 'proj-1', agent: 'dev', cwd: '/tmp/proj' });
+    } catch (e) {
+      add('SPAWN_CALL', false, 'createTab 抛错: ' + e);
+    }
+    await new Promise((r) => setTimeout(r, 400));
+    const term = termText();
+    const has = term.length > 10; // 先要求有内容：否则下面的 includes 会**真空通过**
+    add('SPAWN_OK', has, '终端里有内容（长度 ' + term.length + '）');
+    add('TERM_AGENT_NOT_INJECTED', has && term.includes('身份未注入'), '身份没注入要说出来');
+    add('TERM_PROVIDER_FALLBACK', has && term.includes('指定的供应商不存在'), '回退要说出来');
+    add('TERM_SWITCHED_FROM', has && term.includes('已从 kimi 切换'), '换过路线要说出来');
+    add('TERM_POSTURE_INFERRED', has && term.includes('acceptEdits') && term.includes('推断'), '推断的档位要标明');
+    add('TERM_SKILLS_MISSING', has && term.includes('ghost-skill'), '找不到的技能要说出来');
+    add('TERM_NO_MARKDOWN_STARS', has && !term.includes('**'), '终端是纯文本，不该出现 markdown 星号');
+
+    // ①b 启动期降级必须显示在状态栏（以前只躺在日志里）
+    const warnEl = document.getElementById('healthWarn');
+    const warnText = (warnEl && warnEl.textContent) || '';
+    add('STARTUP_ISSUE_SHOWN', warnText.includes('终端列表') && warnEl.classList.contains('on'),
+        '启动降级要出现在状态栏（实际："' + warnText.slice(0, 40) + '"）');
+    add('STARTUP_ISSUE_TOOLTIP', !!warnEl && (warnEl.title || '').includes('readonly'),
+        '悬停要能看到技术原因');
+
+    // ② 工作台：审查队列 + 自报完成 + 任务级模型
+    const wp = window.__onecode.workPanel;
+    await wp.refresh();
+    await new Promise((r) => setTimeout(r, 200));
+    const html = (document.getElementById('feTabWork') || {}).innerHTML || '';
+    const hasHtml = html.includes('wp-summary'); // 先要求面板真的渲染了
+    add('WORK_RENDERED', hasHtml, '工作台渲染了（长度 ' + html.length + '）');
+    add('WORK_QUEUE', hasHtml && html.includes('公众号排版成品'), '待验收队列要有产出');
+    add('WORK_UNVERIFIED', hasHtml && html.includes('未验证'), '证据没验过要标出来');
+    add('WORK_SELF_CLAIMED', hasHtml && html.includes('agent 自报完成') && html.includes('自报完成待裁决'), '自报完成要单独成组');
+    add('WORK_TASK_MODEL', hasHtml && html.includes('glm-4-plus'), '任务级模型要显示');
+    add('WORK_NO_STARS', hasHtml && !html.includes('**'), 'HTML 里不该有 markdown 星号');
+
+    // ②b 结构化槽位：不是终端，而是消息列表 + 每轮金额
+    try {
+      await window.__onecode.tabManager.createStructuredTab({
+        projectId: 'proj-1', cwd: '/tmp/proj', agent: 'dev',
+      });
+      await new Promise((r) => setTimeout(r, 300));
+      const st = window.__onecode.tabManager.tabs.get(window.__onecode.tabManager.activeId);
+      const ssEl = st && st.termEl;
+      const ssHtml = (ssEl && ssEl.innerHTML) || '';
+      add('SS_TAB_CREATED', !!(st && st.kind === 'structured'), '要建出结构化槽位（kind=structured）');
+      add('SS_NOT_TERMINAL', !!st && !st.term, '结构化槽位不该有 xterm 实例');
+      add('SS_HEAD', ssHtml.includes('ss-head') && ssHtml.includes('@dev'), '要显示身份');
+      add('SS_ROUTE', ssHtml.includes('glm / glm-4-plus'), '要显示走的哪条路线');
+      add('SS_EMPTY_HINT', ssHtml.includes('还没有说话'), '空会话要给下一步');
+      // 发一句（桩会返回两轮：一轮成功一轮失败）
+      const ctrl = st && st.controller;
+      await ctrl.send('写一段');
+      await new Promise((r) => setTimeout(r, 300));
+      const after = (ssEl && ssEl.innerHTML) || '';
+      add('SS_REPLY', after.includes('写好了'), '要显示回复');
+      add('SS_COST', after.includes('$0.174335'), '每轮要显示金额');
+      add('SS_FAIL_VISIBLE', after.includes('⚠ 失败：超时'), '失败的轮次要写出原因');
+      add('SS_TOTAL_FROM_RUST', after.includes('合计 $0.174335'), '合计要用后端算好的数字');
+      add('SS_NO_STARS', !after.includes('**'), 'HTML 里不该有 markdown 星号');
+    } catch (e) {
+      add('SS_TAB_CREATED', false, '结构化槽位抛错：' + e);
+    }
+
+    // ③ 派活：把任务正文写进 PTY（且不代按回车）
+    window.__ptyWrites.length = 0;
+    // 指名点 write-draft 那条：DOM 里第一个派活按钮属于"agent 自报完成"那组
+    // （第 12 刀特意把它排在前面），点错了会得到另一条任务的正文
+    const btn = document.querySelector('#feTabWork [data-wp-action="dispatch"][data-wp-id="write-draft"]');
+    if (btn) { btn.click(); await new Promise((r) => setTimeout(r, 300)); }
+    // pty_write 的 data 是**字节数组**（实测），要解码成文本再断言
+    const asText = (d) => {
+      try {
+        if (typeof d === 'string') return d;
+        return new TextDecoder().decode(new Uint8Array(d));
+      } catch (e) {
+        return '(解码失败)';
+      }
+    };
+    const writes = window.__ptyWrites.map((w) => ({ id: w.id, text: asText(w.data) }));
+    window.__dispatchDebug = JSON.stringify(writes.map((w) => w.text.slice(0, 60)));
+    const taskWrite = writes.find((w) => /write-draft/.test(w.text));
+    add('DISPATCH_FOUND_BUTTON', !!btn, '面板里要有派活按钮');
+    // 注意：不要用 writes[0] —— 启动时的欢迎语也是 pty_write（这一条最初就是这么写错的）
+    add('DISPATCH_WROTE', !!taskWrite && writes.length === 1, '派活要写入任务 id（本次 ' + writes.length + ' 次：' + window.__dispatchDebug + '）');
+    add('DISPATCH_NO_ENTER', !!taskWrite && !taskWrite.text.includes('\r'), '不能代按回车（\r 会触发提交）');
+    add('DISPATCH_TASK_TEXT', !!taskWrite && taskWrite.text.includes('写一篇稿'), '任务标题要带上');
+    add('DISPATCH_ASKS_FOR_REVIEW', !!taskWrite && taskWrite.text.includes('review'), '要提示写成 review 等验收');
+
+    return checks;
+  }
+
+  // 等一会儿再落盘（模块是 deferred，启动期还会有一串异步 invoke）
+  window.addEventListener('load', () => {
+    setTimeout(() => {
+      const errs = log.filter((l) => l.startsWith('ERROR') || l.startsWith('UNHANDLED'));
+      const pre = document.createElement('pre');
+      pre.id = 'bootlog';
+      flowChecks().then((checks) => {
+        const failed = checks.filter(([, ok]) => !ok);
+        const missing = ['app', 'paletteOverlay', 'termViewport', 'feTabWork', 'filePanel']
+          .filter((id) => !document.getElementById(id));
+        pre.textContent = [
+          'MODULE_LOADED: ' + (invokes.length > 0 ? 'yes' : 'no'),
+          'INVOKES: ' + invokes.length + ' [' + [...new Set(invokes)].join(', ') + ']',
+          'MISSING_DOM_IDS: ' + (missing.length ? missing.join(', ') : 'none'),
+          'BOOT_ERRORS: ' + errs.length,
+          ...errs.slice(0, 8),
+          ...checks.map(([n, ok, why]) => (ok ? 'PASS  ' : 'FAIL  ') + n.padEnd(26) + why),
+          failed.length ? 'RESULT: ' + failed.length + '_FLOW_CHECK(S)_FAILED' : 'RESULT: ALL_FLOW_CHECKS_PASS',
+        ].join('\n');
+        document.body.appendChild(pre);
+      });
+    }, 500);
+  });
+})();
+</script>

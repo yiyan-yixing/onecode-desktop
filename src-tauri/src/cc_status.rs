@@ -160,7 +160,7 @@ fn load_cc_status(global_dir: &Path, project_dir: Option<&Path>) -> CcStatus {
 
 // ── 加载器 ──────────────────────────────────────────────────────────
 
-fn read_text(path: &Path) -> Option<String> {
+pub(crate) fn read_text(path: &Path) -> Option<String> {
     std::fs::read_to_string(path).ok()
 }
 
@@ -461,25 +461,64 @@ fn run_bash_with_timeout(cmd: &str, cwd: Option<&Path>) -> Option<String> {
 
 // ── frontmatter / cron 解析 ─────────────────────────────────────────
 
-/// 提取 `---\n...\n---` 之间的 frontmatter 正文（行级解析，无需 regex）。
-fn frontmatter_body(content: &str) -> Option<String> {
+/// 提取 `---\n...\n---` 之间的 frontmatter 与之后的正文（行级解析，无需 regex）。
+///
+/// 返回 `(frontmatter, body)`；首行不是 `---` 或缺少闭合 `---` 时返回 `None`。
+/// **这是 frontmatter 解析的唯一实现** —— `frontmatter_body()` 与
+/// `agents::resolve_agent()` 都走这里，避免两处各写一份、改一处漏一处。
+///
+/// 边界（本机真实文件逼出来的）：有些 agent md 开头多写了一个空的
+/// `---\n---` 块（例：`~/.claude/agents/dev.md`）。若只解析第一个块会得到空
+/// frontmatter，导致 `fm_field("name")` 为空、整个 agent 被静默跳过。
+/// 因此当解析出的 frontmatter 为空时，对剩余正文再解析一次（最多 2 次）。
+pub(crate) fn frontmatter_split(content: &str) -> Option<(String, String)> {
+    let mut current = content.to_string();
+    for _ in 0..2 {
+        let (fm, body) = split_once_frontmatter(&current)?;
+        if !fm.trim().is_empty() {
+            return Some((fm, body));
+        }
+        // 空 frontmatter 块：多出来的分隔符被当成"闭合"吃掉了，
+        // 把它补回去再解析一次（真实形态：`---\n---\nname: dev\n...\n---\n正文`）。
+        current = format!("---\n{body}");
+    }
+    split_once_frontmatter(&current)
+}
+
+/// 单次解析：要求首行为 `---`，取到下一个 `---` 为止。
+fn split_once_frontmatter(content: &str) -> Option<(String, String)> {
     let mut lines = content.lines();
     let first = lines.next()?;
     if first.trim() != "---" {
         return None;
     }
+    let mut fm = Vec::new();
     let mut body = Vec::new();
+    let mut closed = false;
     for l in lines {
-        if l.trim() == "---" {
-            return Some(body.join("\n"));
+        if !closed {
+            if l.trim() == "---" {
+                closed = true;
+                continue;
+            }
+            fm.push(l);
+        } else {
+            body.push(l);
         }
-        body.push(l);
     }
-    None
+    if !closed {
+        return None;
+    }
+    Some((fm.join("\n"), body.join("\n").trim().to_string()))
+}
+
+/// 提取 frontmatter 正文（保留旧签名，供既有调用点使用）。
+pub(crate) fn frontmatter_body(content: &str) -> Option<String> {
+    frontmatter_split(content).map(|(fm, _)| fm)
 }
 
 /// 从 frontmatter 取 `key:` 字段值（trim）。
-fn fm_field(fm: &str, key: &str) -> String {
+pub(crate) fn fm_field(fm: &str, key: &str) -> String {
     let prefix = format!("{key}:");
     for line in fm.lines() {
         if let Some(rest) = line.trim_start().strip_prefix(&prefix) {
@@ -705,6 +744,20 @@ mod tests {
         assert_eq!(frontmatter_body("# no fm"), None);
         assert_eq!(frontmatter_body("---\nname: x"), None); // 无闭合
     }
+    #[test]
+    fn frontmatter_empty_leading_block_is_skipped() {
+        // 真实文件形态：~/.claude/agents/dev.md 开头多了一个空的 ---/--- 块。
+        // 修复前会解析出空 frontmatter → agent 被静默跳过。
+        let content = "---\n---\nname: dev\ndescription: AI 开发者\n---\n正文";
+        let (fm, body) = frontmatter_split(content).expect("应当解析到第二块");
+        assert_eq!(fm_field(&fm, "name"), "dev");
+        assert_eq!(body, "正文");
+        // 正常单块不受影响
+        let (fm2, body2) = frontmatter_split("---\nname: foo\n---\nB").unwrap();
+        assert_eq!(fm_field(&fm2, "name"), "foo");
+        assert_eq!(body2, "B");
+    }
+
     #[test]
     fn fm_field_lookup() {
         let fm = "name: Arch\nmodel: opus";

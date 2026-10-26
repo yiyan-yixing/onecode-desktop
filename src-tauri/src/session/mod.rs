@@ -25,6 +25,12 @@ pub struct PersistentSlot {
     pub cwd: String,
     pub env: std::collections::HashMap<String, String>,
     pub backend: String,
+    /// agent 身份（`@name`）；None = 通用终端。重启后据此恢复身份。
+    pub agent: Option<String>,
+    /// 绑定的供应商 id（自选模型）；None = 跟随全局激活供应商。
+    pub provider_id: Option<String>,
+    /// 该槽实际使用的模型。
+    pub model: Option<String>,
     pub created_at: String,
     pub last_active_at: String,
 }
@@ -33,54 +39,42 @@ pub struct SessionStore {
     db: Arc<Mutex<rusqlite::Connection>>,
 }
 
+/// 列是否存在。四个 migration 共用一份实现 —— 避免同一段 PRAGMA 探针
+/// 抄四遍、改一处漏三处。
+fn has_column(conn: &rusqlite::Connection, table: &str, column: &str) -> Result<bool> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let mut rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
+    Ok(rows.any(|c| c.map(|c| c == column).unwrap_or(false)))
+}
+
 impl SessionStore {
     pub fn new(data_dir: PathBuf) -> Result<Self> {
         std::fs::create_dir_all(&data_dir).ok();
         let path = data_dir.join("sessions.db");
         let conn = rusqlite::Connection::open(path)?;
         conn.execute_batch(schema::CREATE_TABLE_SQL)?;
-        // Migration: add project_id column if missing (upgrade from v0)
-        let has_project_id: bool = {
-            let mut stmt = conn.prepare("PRAGMA table_info(terminals)")?;
-            let rows: Vec<String> = stmt
-                .query_map([], |row| row.get::<_, String>(1))?
-                .filter_map(|r| r.ok())
-                .collect();
-            rows.iter().any(|c| c == "project_id")
-        };
-        if !has_project_id {
-            conn.execute_batch("ALTER TABLE terminals ADD COLUMN project_id TEXT")?;
-            log::info!("[session] migrated: added project_id column");
-        }
-        // Migration: add backend column if missing
-        let has_backend: bool = {
-            let mut stmt = conn.prepare("PRAGMA table_info(terminals)")?;
-            let rows: Vec<String> = stmt
-                .query_map([], |row| row.get::<_, String>(1))?
-                .filter_map(|r| r.ok())
-                .collect();
-            rows.iter().any(|c| c == "backend")
-        };
-        if !has_backend {
-            conn.execute_batch(
+        // Migrations: 旧库补列（升级路径）
+        let migrations: &[(&str, &str)] = &[
+            ("project_id", "ALTER TABLE terminals ADD COLUMN project_id TEXT"),
+            (
+                "backend",
                 "ALTER TABLE terminals ADD COLUMN backend TEXT NOT NULL DEFAULT 'claude-code'",
-            )?;
-            log::info!("[session] migrated: added backend column");
-        }
-        // Migration: add last_active_at column if missing
-        let has_last_active_at: bool = {
-            let mut stmt = conn.prepare("PRAGMA table_info(terminals)")?;
-            let rows: Vec<String> = stmt
-                .query_map([], |row| row.get::<_, String>(1))?
-                .filter_map(|r| r.ok())
-                .collect();
-            rows.iter().any(|c| c == "last_active_at")
-        };
-        if !has_last_active_at {
-            conn.execute_batch(
+            ),
+            (
+                "last_active_at",
                 "ALTER TABLE terminals ADD COLUMN last_active_at TEXT NOT NULL DEFAULT ''",
-            )?;
-            log::info!("[session] migrated: added last_active_at column");
+            ),
+            // agent 身份（@name 派发）。可空：旧的通用终端没有身份。
+            ("agent", "ALTER TABLE terminals ADD COLUMN agent TEXT"),
+            // 每槽路由（自选模型）。可空：旧的槽跟随全局激活供应商。
+            ("provider_id", "ALTER TABLE terminals ADD COLUMN provider_id TEXT"),
+            ("model", "ALTER TABLE terminals ADD COLUMN model TEXT"),
+        ];
+        for (column, sql) in migrations {
+            if !has_column(&conn, "terminals", column)? {
+                conn.execute_batch(sql)?;
+                log::info!("[session] migrated: added {column} column");
+            }
         }
         Ok(Self {
             db: Arc::new(Mutex::new(conn)),
@@ -94,8 +88,8 @@ impl SessionStore {
         db.execute("DELETE FROM terminals", [])?;
         for s in slots {
             db.execute(
-                "INSERT INTO terminals (id, label, project_id, cmd, args, cwd, env, backend, created_at, last_active_at) \
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+                "INSERT INTO terminals (id, label, project_id, cmd, args, cwd, env, backend, agent, provider_id, model, created_at, last_active_at) \
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
                 rusqlite::params![
                     s.id,
                     s.label,
@@ -105,6 +99,9 @@ impl SessionStore {
                     s.cwd,
                     serde_json::to_string(&s.env)?,
                     s.backend,
+                    s.agent,
+                    s.provider_id,
+                    s.model,
                     s.created_at,
                     s.last_active_at,
                 ],
@@ -117,7 +114,7 @@ impl SessionStore {
     pub async fn load_all(&self) -> Result<Vec<PersistentSlot>> {
         let db = self.db.lock().await;
         let mut stmt = db.prepare(
-            "SELECT id, label, project_id, cmd, args, cwd, env, backend, created_at, last_active_at \
+            "SELECT id, label, project_id, cmd, args, cwd, env, backend, agent, provider_id, model, created_at, last_active_at \
              FROM terminals ORDER BY created_at",
         )?;
         let rows = stmt.query_map([], |row| {
@@ -134,8 +131,11 @@ impl SessionStore {
                 backend: row
                     .get::<_, Option<String>>(7)?
                     .unwrap_or_else(|| "claude-code".to_string()),
-                created_at: row.get(8)?,
-                last_active_at: row.get::<_, Option<String>>(9)?.unwrap_or_default(),
+                agent: row.get::<_, Option<String>>(8)?,
+                provider_id: row.get::<_, Option<String>>(9)?,
+                model: row.get::<_, Option<String>>(10)?,
+                created_at: row.get(11)?,
+                last_active_at: row.get::<_, Option<String>>(12)?.unwrap_or_default(),
             })
         })?;
         let mut out = Vec::new();
@@ -143,5 +143,82 @@ impl SessionStore {
             out.push(r?);
         }
         Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn slot(id: &str, agent: Option<&str>) -> PersistentSlot {
+        PersistentSlot {
+            id: id.to_string(),
+            label: "L".to_string(),
+            project_id: Some("p1".to_string()),
+            cmd: "claude".to_string(),
+            args: vec!["--permission-mode".to_string()],
+            cwd: "/tmp/p1".to_string(),
+            env: std::collections::HashMap::new(),
+            backend: "claude-code".to_string(),
+            agent: agent.map(|s| s.to_string()),
+            provider_id: Some("deepseek".to_string()),
+            model: Some("deepseek-chat".to_string()),
+            created_at: "2026-10-14T00:00:00Z".to_string(),
+            last_active_at: "2026-10-14T01:00:00Z".to_string(),
+        }
+    }
+
+    /// agent 身份必须能跨重启恢复 —— 否则"@name 真派发"只在当次会话有效，
+    /// 重启后员工就退化成通用终端。
+    #[test]
+    fn agent_identity_survives_roundtrip() {
+        let dir = std::env::temp_dir().join(format!("dsh-session-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let store = SessionStore::new(dir.clone()).unwrap();
+
+        let slots = vec![slot("a", Some("architect")), slot("b", None)];
+        rt.block_on(store.save_all(&slots)).unwrap();
+        let loaded = rt.block_on(store.load_all()).unwrap();
+
+        assert_eq!(loaded.len(), 2);
+        let a = loaded.iter().find(|s| s.id == "a").unwrap();
+        assert_eq!(a.agent.as_deref(), Some("architect"));
+        assert_eq!(a.provider_id.as_deref(), Some("deepseek"), "每槽路由必须能跨重启恢复");
+        assert_eq!(a.model.as_deref(), Some("deepseek-chat"));
+        let b = loaded.iter().find(|s| s.id == "b").unwrap();
+        assert_eq!(b.agent, None, "通用终端必须保持 None，不能被写成空串");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 旧库（无 agent 列）升级后必须可用，且既有行读出来是 None。
+    #[test]
+    fn migration_adds_agent_column_to_legacy_db() {
+        let dir = std::env::temp_dir().join(format!("dsh-session-legacy-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // 造一个没有 agent 列的旧表
+        {
+            let conn = rusqlite::Connection::open(dir.join("sessions.db")).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE terminals (
+                    id TEXT PRIMARY KEY, label TEXT NOT NULL, project_id TEXT,
+                    cmd TEXT NOT NULL, args TEXT NOT NULL, cwd TEXT NOT NULL,
+                    env TEXT NOT NULL, backend TEXT NOT NULL DEFAULT 'claude-code',
+                    created_at TEXT NOT NULL, last_active_at TEXT NOT NULL DEFAULT '');
+                 INSERT INTO terminals (id,label,cmd,args,cwd,env,created_at)
+                 VALUES ('old','L','claude','[]','/tmp','{}','t');",
+            )
+            .unwrap();
+        }
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let store = SessionStore::new(dir.clone()).unwrap();
+        assert!(has_column(&store.db.blocking_lock(), "terminals", "agent").unwrap());
+        let loaded = rt.block_on(store.load_all()).unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].agent, None);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

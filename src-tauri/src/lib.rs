@@ -2,19 +2,30 @@
 
 mod macros;
 
+mod agents;
+mod acp;
 mod backend;
 mod cc_sessions;
 mod cc_status;
 mod commands;
 mod config;
+mod deliverables;
+mod diagnostics;
+mod engine_probe;
+mod engine_run;
 mod events;
 mod fs_explorer;
 mod keep_awake;
+mod ledger;
 mod menu;
 mod model_context;
 mod pty;
+mod proc;
 mod providers;
 mod session;
+mod spawn_plan;
+mod structured_slot;
+mod tasks;
 mod tray;
 mod wizard;
 
@@ -53,6 +64,7 @@ pub fn run() {
             // 确保后续 ConfigManager/watcher 从一致状态启动。
             if let Err(e) = providers::reconcile_active_to_desktop(&provider_catalog) {
                 log::warn!("[providers] reconcile failed (P1, non-fatal): {e}");
+                diagnostics::record("provider-reconcile", e.clone(), "当前供应商可能没有真正生效");
             }
             let provider_store = providers::ProviderStore::new(provider_catalog);
             app.manage(provider_store);
@@ -85,10 +97,21 @@ pub fn run() {
                     }
                     Err(e) => {
                         log::warn!("[session] init failed (P1, non-fatal): {e}");
+                        // 这不只是日志：终端列表 / 会话恢复会直接是空的
+                        diagnostics::record(
+                            "session-store",
+                            format!("{e}"),
+                            "终端列表与会话恢复不可用 —— 重启后可能看不到原有终端",
+                        );
                     }
                 },
                 Err(e) => {
                     log::warn!("[session] app_data_dir unavailable (P1, non-fatal): {e}");
+                    diagnostics::record(
+                        "app-data-dir",
+                        format!("{e}"),
+                        "终端列表与会话恢复不可用 —— 重启后可能看不到原有终端",
+                    );
                 }
             }
 
@@ -122,6 +145,22 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::roster_list,
+            commands::roster_set,
+            commands::roster_clear,
+            commands::roster_show,
+            commands::ledger_scan,
+            commands::ledger_show,
+            commands::task_list,
+            commands::task_create,
+            commands::task_set_status,
+            commands::task_assign,
+            commands::task_board,
+            commands::task_review,
+            commands::deliverables_scan,
+            commands::deliverable_set_status,
+            commands::deliverable_review,
+            commands::deliverable_verify,
             commands::pty_spawn,
             commands::pty_kill,
             commands::pty_restart,
@@ -138,6 +177,10 @@ pub fn run() {
             commands::cc_status_invalidate,
             commands::cc_sessions_list,
             commands::health_check,
+            commands::startup_issues,
+            commands::selfcheck_enabled,
+            commands::selfcheck_flags,
+            commands::selfcheck_scratch_dir,
             commands::save_config,
             commands::load_config,
             commands::save_project,
@@ -152,6 +195,16 @@ pub fn run() {
             wizard::is_first_run,
             wizard::save_wizard_config,
             backend::list_backends,
+            commands::structured_open,
+            commands::structured_send,
+            commands::structured_state,
+            commands::structured_list,
+            commands::engine_run,
+            commands::engine_run_show,
+            commands::engine_probe,
+            commands::engine_probe_show,
+            commands::engines_show,
+            commands::engines_example_show,
             commands::debug_log,
             commands::open_external,
             commands::open_in_vscode,

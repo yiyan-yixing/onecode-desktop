@@ -9,6 +9,7 @@ import { ScrollThumb } from './scroll-thumb.js';
 import { initImeFix } from './ime-fix.js';
 import { MentionController } from './mention.js';
 import * as ipc from '../ipc-bridge.js';
+import { StructuredViewController } from '../structured-view.js';
 const { debugLog } = ipc;
 
 const AUTOSAVE_DEBOUNCE_MS = 350;
@@ -81,6 +82,9 @@ export class TabManager {
           cwd: slot.cwd,
           env: slot.env,
           backend: slot.backend || null,
+          agent: slot.agent || null,
+          providerId: slot.provider_id || null,
+          model: slot.model || null,
           projectId: slot.project_id,
         });
       }
@@ -102,6 +106,52 @@ export class TabManager {
     // 无 slots（全新安装或所有终端已关闭）→ 空状态，用户通过侧栏或空球创建项目
   }
 
+  /**
+   * 开一个**结构化槽位**（目标 ①：可换引擎不该要求引擎长得像终端）。
+   *
+   * 与 PTY 槽位共用：项目归属、orb 列表、激活/切换、持久化外壳。
+   * 不同的是内容：一个消息列表 + 输入框，而不是 xterm；每轮带金额。
+   */
+  async createStructuredTab(opts = {}) {
+    if (!opts.projectId) {
+      // 与终端槽位同一条规矩：所有槽位必须属于某个项目
+      if (this.orbital) this.orbital._newProject();
+      return null;
+    }
+    const id = 'ss-' + Math.random().toString(36).slice(2, 10);
+    const label = opts.label || (opts.agent ? '@' + opts.agent : 'Structured');
+    const el = document.createElement('div');
+    el.className = 'ss-instance term-instance';
+    this.termContainer.appendChild(el);
+
+    const controller = new StructuredViewController({
+      ipc,
+      cwd: opts.cwd,
+      agent: opts.agent || null,
+      providerId: opts.providerId || null,
+      model: opts.model || null,
+      onError: (m) => console.warn('[structured]', m),
+    });
+
+    const state = {
+      id, label, kind: 'structured',
+      cwd: opts.cwd, projectId: opts.projectId || null,
+      agent: opts.agent || null,
+      providerId: opts.providerId || null, model: opts.model || null,
+      term: null, fitAddon: null, termEl: el, controller,
+      mention: null, status: 'running', isError: false,
+    };
+    this.tabs.set(id, state);
+    this.order.push(id);
+    this.orbital?.addOrb(id, label, 'running', opts.cwd);
+    this.switchTo(id);
+    this._scheduleSave();
+    this._notifyChange();
+
+    await controller.init(el);
+    return id;
+  }
+
   async createTab(opts = {}) {
     // 所有终端必须属于某个项目。无 projectId 时打开新建项目对话框。
     if (!opts.projectId) {
@@ -113,6 +163,26 @@ export class TabManager {
 
     const label = opts.label || opts.projectId || 'Terminal';
     const backend = opts.backend || null;
+    // agent 身份（@name）：非空时以该 agent 启动一个新 Slot，而不是复用通用终端。
+    const agent = opts.agent || null;
+    let agentInjected = false;
+    // 每槽路由（自选模型）：不指定则跟随全局激活供应商。
+    const providerId = opts.providerId || null;
+    const model = opts.model || null;
+    let route = { provider: null, model: null, fallback: false };
+    // 员工级权限姿态的落地结果（要如实显示，不能让"门"静默不生效）
+    // 路线来源与 failover（必须可见：否则用户以为用的是自己设的那个供应商）
+    let routeSource = null;
+    let switchedFrom = null;
+    let switchReason = null;
+    let posture = null;
+    let postureInferred = false;
+    let allowedTools = [];
+    let postureNote = null;
+    // 能力组合：技能加载结果
+    let skillsLoaded = [];
+    let skillsMissing = [];
+    let skillsDeferred = [];
 
     const termEl = document.createElement('div');
     termEl.className = 'term-instance';
@@ -191,14 +261,83 @@ export class TabManager {
         label,
         projectId: opts.projectId || null,
         backend,
+        agent,
+        providerId,
+        model,
         cols: term.cols,
         rows: term.rows,
         onData,
       });
       id = result.id;
       pid = result.pid || null;
+      agentInjected = !!result.agent_injected;
+      route = {
+        provider: result.effective_provider || null,
+        model: result.effective_model || null,
+        fallback: !!result.provider_fallback,
+      };
+      routeSource = result.route_source || null;
+      switchedFrom = result.switched_from || null;
+      switchReason = result.switch_reason || null;
+      posture = result.posture || null;
+      postureInferred = !!result.posture_inferred;
+      allowedTools = Array.isArray(result.allowed_tools) ? result.allowed_tools : [];
+      postureNote = result.posture_note || null;
+      skillsLoaded = Array.isArray(result.skills_loaded) ? result.skills_loaded : [];
+      skillsMissing = Array.isArray(result.skills_missing) ? result.skills_missing : [];
+      skillsDeferred = Array.isArray(result.skills_deferred) ? result.skills_deferred : [];
       // IME 直接字符插入的发送回调（ime-fix.js Fix 3 需要）
       term._imeSendFn = (data) => ipc.ptyWrite(id, data);
+      // ★ 诚实显示：要求了身份但没注入成功 → 明确告诉人，不假装它是该 agent。
+      if (agent && !agentInjected) {
+        term.write('\x1b[33m⚠ agent 身份未注入\x1b[0m\r\n');
+        term.write(`  \x1b[2m@${agent} 的定义没找到，或后端 ${backend || 'claude-code'} 不支持注入。\x1b[0m\r\n`);
+        term.write('  \x1b[2m已按通用终端启动。定义应放在 <项目>/.claude/agents/ 或 ~/.claude/agents/\x1b[0m\r\n\r\n');
+      }
+      // ★ 诚实显示：请求的供应商不存在 → 已回退，别让人以为跑在指定供应商上。
+      if (route.fallback) {
+        term.write('\x1b[33m⚠ 指定的供应商不存在\x1b[0m\r\n');
+        term.write(`  \x1b[2m已回退到当前激活供应商：${route.provider || '(未知)'}\x1b[0m\r\n\r\n`);
+      }
+      // ★ failover：主选不可用时可能已经换到别家 —— 不说出来就是"静默用错供应商"。
+      if (switchedFrom) {
+        term.write(`\x1b[33m⚠ 已从 ${switchedFrom} 切换到 ${route.provider || '(未知)'}\x1b[0m\r\n`);
+        if (switchReason) term.write(`  \x1b[2m${switchReason}\x1b[0m\r\n`);
+        term.write('\r\n');
+      } else if (switchReason) {
+        // 没换成也要说：否则用户以为 failover 生效了
+        term.write(`\x1b[33m⚠ 路线未按预期生效：${switchReason}\x1b[0m\r\n\r\n`);
+      }
+      if (routeSource === 'roster') {
+        term.write('\x1b[2m· 模型来自员工花名册\x1b[0m\r\n');
+      } else if (routeSource === 'requested') {
+        term.write('\x1b[2m· 模型由本次派发指定\x1b[0m\r\n');
+      }
+      // ★ 诚实的权限说明：这是"门到底开没开"的唯一可见来源。
+      if (posture) {
+        const why = postureInferred ? '（由 tools 声明推断）' : '';
+        term.write(`\x1b[2m· 权限档 ${posture}${why}\x1b[0m\r\n`);
+      }
+      if (allowedTools.length) {
+        term.write(`\x1b[2m· 工具白名单 ${allowedTools.join(', ')}\x1b[0m\r\n`);
+      }
+      if (postureNote) {
+        term.write(`\x1b[33m⚠ 权限设置未完全生效：${postureNote}\x1b[0m\r\n`);
+      }
+      if (posture || allowedTools.length || postureNote) term.write('\r\n');
+      // ★ 能力组合：技能加载结果必须如实显示 —— "声明了但没生效"是最难查的一类问题。
+      if (skillsLoaded.length) {
+        term.write(`\x1b[2m· 技能 ${skillsLoaded.join(', ')}\x1b[0m\r\n`);
+      }
+      if (skillsMissing.length) {
+        term.write(`\x1b[33m⚠ 技能找不到：${skillsMissing.join(', ')}\x1b[0m\r\n`);
+        term.write('  \x1b[2m查找顺序：<项目>/.claude/skills → <项目>/.agents/skills → ~/.onecode/cc-config/skills → ~/.claude/skills → ~/.agents/skills\x1b[0m\r\n');
+      }
+      if (skillsDeferred.length) {
+        // 不是失败：正文超预算，改为把 SKILL.md 路径交给模型按需读（渐进披露）
+        term.write(`\x1b[2m· 技能按需读取（正文超 32KB，已给路径）：${skillsDeferred.join(', ')}\x1b[0m\r\n`);
+      }
+      if (skillsLoaded.length || skillsMissing.length || skillsDeferred.length) term.write('\r\n');
     } catch (err) {
       // Display clear error in terminal for failed spawn
       const errMsg = String(err);
@@ -226,6 +365,8 @@ export class TabManager {
       this.tabs.set(id, {
         id, label, cmd: opts.cmd, args: opts.args, cwd: opts.cwd, env: opts.env,
         projectId: opts.projectId || null, backend,
+        agent, agentInjected: false,
+        providerId, model,
         term, fitAddon, scrollThumb, termEl,
         mention: null, unlistenExit: null, unlistenRestart: null,
         dataDisposable: null, resizeDisposable: null,
@@ -360,6 +501,11 @@ export class TabManager {
     const state = {
       id, label, cmd: opts.cmd, args: opts.args, cwd: opts.cwd, env: opts.env,
       projectId: opts.projectId || null, backend,
+      agent, agentInjected,
+      providerId, model, route,
+      routeSource, switchedFrom, switchReason,
+      posture, postureInferred, allowedTools, postureNote,
+      skillsLoaded, skillsMissing, skillsDeferred,
       pid,
       term, fitAddon, scrollThumb, termEl, mention, unlistenExit, unlistenRestart,
       dataDisposable, resizeDisposable,
@@ -390,6 +536,16 @@ export class TabManager {
       }
     }
     this.orbital.setActive(id);
+
+    // ★ 结构化槽位没有 xterm：下面这些滚动/fit/focus 全是 PTY 专属。
+    // 早先这里无条件读 `st.term.buffer`，一建结构化槽位就抛
+    // "Cannot read properties of null (reading 'buffer')" —— 加一种 tab 类型
+    // 就必须把 PTY 专属路径护起来（这是启动检查抓到的）。
+    if (st.kind === 'structured' || !st.term) {
+      this.activeId = id;
+      return;
+    }
+
     // 保存当前滚动位置，防止 fit+flushInactiveBuffer 导致位置跳到底部
     const savedViewportY = st.term.buffer.active.viewportY;
     // 刷入非活跃期间缓冲的 PTY 输出（避免切换后内容缺失）
@@ -517,6 +673,9 @@ export class TabManager {
         const result = await ipc.ptySpawn({
           cmd: st.cmd, args: st.args, cwd: st.cwd, env: st.env, label: st.label,
           backend: st.backend || null,
+          agent: st.agent || null,
+          providerId: st.providerId || null,
+          model: st.model || null,
           projectId: st.projectId,
           cols: st.term.cols,
           rows: st.term.rows,
@@ -704,7 +863,10 @@ export class TabManager {
 
   updateStatus(id, status, code) {
     const st = this.tabs.get(id);
-    if (st) { st.status = status; st.exitCode = code; }
+    if (st) {
+      st.status = status;
+      st.exitCode = code;
+    }
     this.orbital.updateOrbStatus(id, status);
 
     // Emit ripple on terminal exit

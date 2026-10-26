@@ -3,6 +3,7 @@
 // 「文件」Tab 已移至右侧面板（#filePanel），由 FileExplorerController 独立管理。
 
 import * as ipc from './ipc-bridge.js';
+import { dispatchAgent, insertAgentMention, isMentionModifier } from './agent-dispatch.js';
 const { debugLog } = ipc;
 
 const IDENTITY_COLORS = [
@@ -81,6 +82,17 @@ export class OrbitalController {
     this._loadBackends();
   }
 
+  /**
+   * 拉一次引擎列表（内置 + 全局）。
+   *
+   * 这里**刻意不带 cwd**：调用点是"新建项目"对话框，而那个项目目录此刻还不存在，
+   * 自然也没有 `.onecode/engines.json`。
+   *
+   * 项目层引擎在**别处**可见、可用：
+   * - `spawn_plan` 生成计划时按槽位的 cwd 叠项目层（所以项目引擎能被真正用上）；
+   * - ⌘K →「引擎」对话框会带上当前 cwd，并标出"（含项目层：…）"。
+   * 项目层**不能覆盖已有引擎**（安全规则，见 `backend::Registry::load_layers`）。
+   */
   async _loadBackends() {
     try {
       this._backends = await ipc.listBackends();
@@ -229,12 +241,14 @@ export class OrbitalController {
         `</div>` +
         `<span class="al-scope" style="background:${scopeStyle.bg};color:${scopeStyle.color};border:1px solid ${scopeStyle.border}">${esc(agent.scope)}</span>`;
 
-      // Click → @mention insert into active terminal
-      item.addEventListener('click', () => this._agentClick(agent.id, item));
+      // 点击 = 派发新员工 Slot；⌥/Ctrl/Cmd + 点击 = 当前会话点名
+      // （语义与侧栏一致；实现共用 agent-dispatch.js，不在这里各抄一份）
+      item.title = `点击 = 以 @${agent.id} 的身份新开一个终端\n⌥/Ctrl/Cmd + 点击 = 在当前终端插入 @${agent.id}`;
+      item.addEventListener('click', (e) => this._agentClick(agent.id, item, isMentionModifier(e)));
       item.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
-          this._agentClick(agent.id, item);
+          this._agentClick(agent.id, item, false);
         }
       });
 
@@ -253,47 +267,45 @@ export class OrbitalController {
     return COLORS[Math.abs(hash) % COLORS.length];
   }
 
-  /** Agent click → @mention insert */
-  _agentClick(agentId, itemEl) {
-    if (!this.tm || !this.tm.activeId) {
-      this._showNoTerminalToast();
-      return;
-    }
-    const activeId = this.tm.activeId;
-    const st = this.tm.tabs.get(activeId);
-    if (!st || st.isError) {
-      this._showNoTerminalToast();
-      return;
-    }
-
-    // Write @agent-id to active terminal
-    if (st.mention && typeof st.mention.sendInput === 'function') {
-      if (st.mention.active) st.mention.hide();
-      try { st.mention.sendInput(`@${agentId} `); } catch (e) { /* fallback below */ }
-    } else {
-      ipc.ptyWrite(activeId, `@${agentId} `).catch(() => {});
-    }
-
-    // Visual feedback
+  /** Agent click：默认派发（新开一个以该 agent 为身份的 Slot）；带修饰键则当前会话点名。 */
+  _agentClick(agentId, itemEl, insertOnly = false) {
     itemEl.classList.add('al-mention-flash');
     setTimeout(() => itemEl.classList.remove('al-mention-flash'), 400);
-    try { st.term.focus(); } catch (e) { /* silent */ }
+
+    if (insertOnly) {
+      insertAgentMention({
+        tabManager: this.tm,
+        agentId,
+        ptyWrite: (id, data) => ipc.ptyWrite(id, data),
+        onNotice: (m) => this._showNoTerminalToast(m),
+      });
+      return;
+    }
+
+    dispatchAgent({
+      tabManager: this.tm,
+      agentId,
+      agents: typeof this.agentProvider === 'function' ? this.agentProvider() : [],
+      onNotice: (m) => this._showNoTerminalToast(m),
+    });
   }
 
   /** Toast when no active terminal */
-  _showNoTerminalToast() {
+  _showNoTerminalToast(msg = '请先创建一个终端') {
     const panel = this.el.querySelector('.orbital-tab-content.active[data-orbi-content="agents"]');
     if (!panel) return;
     let toast = panel.querySelector('.al-toast');
     if (!toast) {
       toast = document.createElement('div');
       toast.className = 'al-toast';
-      toast.innerHTML = '<span class="al-toast-msg">请先创建一个终端</span>';
+      toast.innerHTML = '<span class="al-toast-msg"></span>';
       panel.appendChild(toast);
     }
+    const msgEl = toast.querySelector('.al-toast-msg');
+    if (msgEl) msgEl.textContent = msg;
     toast.classList.add('on');
     if (this._toastTimer) clearTimeout(this._toastTimer);
-    this._toastTimer = setTimeout(() => toast.classList.remove('on'), 2000);
+    this._toastTimer = setTimeout(() => toast.classList.remove('on'), 2200);
   }
 
   // ── Project List ──

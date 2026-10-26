@@ -2938,3 +2938,156 @@ body::before {
 .ps-input:focus { border-color: var(--em-bright); }
 .ps-form-actions { display: flex; align-items: center; justify-content: space-between; margin-top: 12px; }
 .ps-form-right { display: flex; gap: 8px; }
+
+/* ── 工作台面板（目标 ④⑤ 的日常入口）────────────────────────────────
+   样式沿用右面板的暖色调；关键信息（问题、未验证）用告警色，
+   与 Rust 侧 review_text 的"问题排在最显眼处"是同一口径。 */
+/* ★ 非激活的 tab 内容必须**完全不占布局**。
+   基础规则用 `visibility: hidden` 隐藏，而 `visibility: hidden` 的元素**仍然参与
+   布局**；`#filePanel` 是 `display:flex; flex-direction:column`，两个 `flex:1`
+   兄弟会把面板高度对半切 —— 可见那一页只剩一半高。
+   加第二页之前只有一页，所以这个坑没暴露过。 */
+.fe-tab-content:not(.active) {
+  display: none;
+}
+
+#feTabWork {
+  overflow-y: auto;
+  padding: 8px 10px 16px;
+  gap: 6px;
+}
+.wp-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 2px 0 8px;
+}
+.wp-chip {
+  padding: 3px 8px;
+  border-radius: 10px;
+  background: var(--cream);
+  color: var(--tx-warm4);
+  font: 600 10px/1.4 var(--font-ui);
+}
+.wp-chip.wp-warn {
+  color: var(--warn, #b45309);
+  background: rgba(180, 83, 9, 0.12);
+}
+.wp-group {
+  margin: 10px 0 4px;
+  color: var(--tx-warm4);
+  font: 700 10px/1 var(--font-ui);
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+}
+.wp-item {
+  border: 1px solid var(--sand);
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin-bottom: 6px;
+  background: rgba(255, 255, 255, 0.4);
+}
+.wp-title {
+  color: var(--tx-warm);
+  font: 600 12px/1.4 var(--font-ui);
+  word-break: break-word;
+}
+.wp-meta,
+.wp-line {
+  margin-top: 3px;
+  color: var(--tx-warm4);
+  font: 500 10.5px/1.4 var(--font-ui);
+}
+.wp-note {
+  margin-top: 4px;
+  color: var(--tx-warm3, var(--tx-warm4));
+  font: 400 11px/1.5 var(--font-ui);
+  word-break: break-word;
+}
+.wp-problem {
+  margin-top: 5px;
+  color: var(--warn, #b45309);
+  font: 600 10.5px/1.4 var(--font-ui);
+  word-break: break-word;
+}
+.wp-line.wp-warn {
+  color: var(--warn, #b45309);
+}
+.wp-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 7px;
+}
+.wp-btn {
+  padding: 4px 9px;
+  border: 1px solid var(--sand);
+  border-radius: 6px;
+  background: none;
+  color: var(--tx-warm4);
+  font: 600 10.5px/1 var(--font-ui);
+  cursor: pointer;
+}
+.wp-btn:hover {
+  background: var(--cream);
+  color: var(--tx-warm);
+}
+.wp-empty {
+  padding: 10px 4px;
+  color: var(--tx-warm4);
+  font: 400 11px/1.6 var(--font-ui);
+}
+.wp-empty.wp-warn {
+  color: var(--warn, #b45309);
+}
+.wp-empty code {
+  font-size: 10px;
+  background: var(--cream);
+  padding: 1px 3px;
+  border-radius: 3px;
+}
+
+/* ── 结构化槽位（目标 ①：不必长得像终端）──────────────────────────── */
+.ss-instance {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  font: 400 12px/1.6 var(--font-ui);
+}
+.ss-head {
+  padding: 8px 12px 6px;
+  border-bottom: 1px solid var(--sand);
+  flex-shrink: 0;
+}
+.ss-title { color: var(--tx-warm); font-weight: 600; }
+.ss-route { color: var(--tx-warm4); font-weight: 500; margin-left: 6px; }
+.ss-meta { color: var(--tx-warm4); font-size: 10.5px; margin-top: 2px; }
+.ss-warn { color: var(--warn, #b45309); font-size: 10.5px; margin-top: 4px; }
+.ss-turns { flex: 1; overflow-y: auto; padding: 10px 12px; min-height: 0; }
+.ss-turn { margin-bottom: 12px; }
+.ss-prompt { color: var(--tx-warm); font-weight: 600; white-space: pre-wrap; word-break: break-word; }
+.ss-reply { color: var(--tx-warm3, var(--tx-warm4)); white-space: pre-wrap; word-break: break-word; margin-top: 3px; }
+.ss-fail { color: var(--warn, #b45309); margin-top: 3px; white-space: pre-wrap; }
+.ss-cost { color: var(--tx-warm4); font-size: 10px; margin-top: 3px; }
+.ss-pending .ss-cost { opacity: 0.7; }
+.ss-empty { padding: 14px 12px; color: var(--tx-warm4); }
+.ss-form { display: flex; gap: 6px; padding: 8px 12px; border-top: 1px solid var(--sand); flex-shrink: 0; }
+.ss-input {
+  flex: 1;
+  padding: 6px 9px;
+  border: 1px solid var(--sand);
+  border-radius: 6px;
+  background: var(--cream);
+  color: var(--tx-warm);
+  font: 400 12px var(--font-ui);
+}
+.ss-send {
+  padding: 6px 12px;
+  border: 1px solid var(--sand);
+  border-radius: 6px;
+  background: none;
+  color: var(--tx-warm4);
+  font: 600 11px var(--font-ui);
+  cursor: pointer;
+}
+.ss-send:hover { background: var(--cream); color: var(--tx-warm); }

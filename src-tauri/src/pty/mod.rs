@@ -60,10 +60,16 @@ pub struct SlotSummary {
     pub cmd: String,
     pub cwd: String,
     pub backend: String,
+    /// 该 Slot 的 agent 身份（`@name`）。None = 通用终端。
+    pub agent: Option<String>,
+    /// 该 Slot 绑定的 provider id（自选模型）。None = 跟随全局激活供应商。
+    pub provider_id: Option<String>,
+    /// 该 Slot 实际使用的模型（spawn 时解析后的值，非请求值）。
+    pub model: Option<String>,
 }
 
 /// 终端配置快照（会话持久化用）。不含运行时状态（pid/status/ring buffer），
-/// 仅保留重 spawn 所需的 {id,label,project_id,cmd,args,cwd,env,backend,created_at,last_active_at}。
+/// 仅保留重 spawn 所需的 {id,label,project_id,cmd,args,cwd,env,backend,agent,provider_id,model,created_at,last_active_at}。
 #[derive(serde::Serialize, Clone)]
 pub struct SlotConfig {
     pub id: String,
@@ -74,6 +80,11 @@ pub struct SlotConfig {
     pub cwd: String,
     pub env: HashMap<String, String>,
     pub backend: String,
+    /// agent 身份，None = 通用终端。持久化后重启仍能恢复身份。
+    pub agent: Option<String>,
+    /// 绑定的 provider id 与模型。持久化后重启仍走同一个供应商/模型。
+    pub provider_id: Option<String>,
+    pub model: Option<String>,
     pub created_at: String,
     pub last_active_at: String,
 }
@@ -128,6 +139,9 @@ impl MultiPtyManager {
         label: Option<String>,
         project_id: Option<String>,
         backend: String,
+        agent: Option<String>,
+        provider_id: Option<String>,
+        model: Option<String>,
         cols: Option<u16>,
         rows: Option<u16>,
     ) -> Result<(Uuid, Option<u32>)> {
@@ -142,7 +156,7 @@ impl MultiPtyManager {
         let label = label.unwrap_or_else(|| "Terminal".to_string());
         let ring_max = self.config.ring_buffer_max_mb * 1024 * 1024;
         let slot = Arc::new(TerminalSlot::new(
-            id, label, project_id, cmd, args, cwd, env, backend, ring_max,
+            id, label, project_id, cmd, args, cwd, env, backend, agent, provider_id, model, ring_max,
         ));
 
         let PtyHandles {
@@ -217,27 +231,27 @@ impl MultiPtyManager {
         let backend = slot.backend.clone();
         let profile = crate::backend::resolve_or_default(&backend);
         let mut env = recover_lock!(slot.env.lock(), "env").clone();
-        for (config_key, env_var) in profile.env_key_map {
-            match *config_key {
+        for (config_key, env_var) in &profile.env_key_map {
+            match config_key.as_str() {
                 "api_key" => {
                     if !config.api_key.is_empty() {
-                        env.insert(env_var.to_string(), config.api_key.clone());
+                        env.insert(env_var.clone(), config.api_key.clone());
                     } else {
-                        env.remove(*env_var);
+                        env.remove(env_var);
                     }
                 }
                 "base_url" => {
                     if !config.base_url.is_empty() {
-                        env.insert(env_var.to_string(), config.base_url.clone());
+                        env.insert(env_var.clone(), config.base_url.clone());
                     } else {
-                        env.remove(*env_var);
+                        env.remove(env_var);
                     }
                 }
                 "model" => {
                     if !config.model.is_empty() {
-                        env.insert(env_var.to_string(), config.model.clone());
+                        env.insert(env_var.clone(), config.model.clone());
                     } else {
-                        env.remove(*env_var);
+                        env.remove(env_var);
                     }
                 }
                 _ => {}
@@ -378,6 +392,9 @@ impl MultiPtyManager {
                 cwd: s.cwd.clone(),
                 env: recover_lock!(s.env.lock(), "env").clone(),
                 backend: s.backend.clone(),
+                agent: s.agent.clone(),
+                provider_id: s.provider_id.clone(),
+                model: s.model.clone(),
                 created_at: s.created_at.to_rfc3339(),
                 last_active_at: recover_lock!(s.last_active_at.lock(), "last_active_at").clone(),
             })
@@ -482,6 +499,21 @@ fn snapshot_tree(root: u32) -> Vec<u32> {
     victims
 }
 
+/// 杀掉以 `root` 为根的整棵进程树（SIGTERM → 100ms → SIGKILL）。
+///
+/// 供**产出验证的超时清理**复用：只杀直接子进程会让孙代被 launchd 收养继续跑
+/// —— 这正是 `sweep_tree` 注释里 2026-08-22 实证过的坑（"退出后 claude 还在"）。
+/// 与其在新模块里再写一份，不如把这里开成 `pub(crate)`。
+pub(crate) fn kill_process_tree(root: u32) {
+    let victims = snapshot_tree(root);
+    if victims.is_empty() {
+        // ps 快照失败 → 降级为只清 root（调用方已 kill 过直接子进程）
+        sweep_tree(&[root]);
+        return;
+    }
+    sweep_tree(&victims);
+}
+
 /// 对整棵进程树执行 SIGTERM → 100ms → SIGKILL 双段清扫（退出/关闭终端专用）。
 /// 只 SIGTERM 直接子进程的教训：shell 先死，孙代（claude/node/…）被 launchd
 /// 收养成孤儿继续跑——「退出 OneCode 后 claude 还在」的根因（2026-08-22 实证）。
@@ -515,6 +547,9 @@ fn summary_of(s: &Arc<TerminalSlot>) -> SlotSummary {
         id: s.id.to_string(),
         label: s.label(),
         project_id: recover_lock!(s.project_id.lock(), "project_id").clone(),
+        agent: s.agent.clone(),
+        provider_id: s.provider_id.clone(),
+        model: s.model.clone(),
         status: s.status().as_str().to_string(),
         pid: *recover_lock!(s.pid.lock(), "pid"),
         exit_code: *recover_lock!(s.exit_code.lock(), "exit_code"),

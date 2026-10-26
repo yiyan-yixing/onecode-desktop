@@ -143,6 +143,13 @@ pub struct TerminalSlot {
     pub env: Mutex<HashMap<String, String>>,
     /// 后端内核标识（"claude-code" / "opencode" / "codex" 等）
     pub backend: String,
+    /// 该 Slot 的 agent 身份（`@name` 的 name）。`None` = 通用终端。
+    /// 身份通过 `--append-system-prompt-file` 注入，注入方式与结果由 spawn 决定。
+    pub agent: Option<String>,
+    /// 该 Slot 绑定的 provider id（自选模型）。None = 跟随全局激活供应商。
+    pub provider_id: Option<String>,
+    /// 该 Slot 实际使用的模型。
+    pub model: Option<String>,
     pub status: Mutex<SlotStatus>,
     pub exit_code: Mutex<Option<i32>>,
     pub pid: Mutex<Option<u32>>,
@@ -183,6 +190,9 @@ impl TerminalSlot {
         cwd: String,
         env: HashMap<String, String>,
         backend: String,
+        agent: Option<String>,
+        provider_id: Option<String>,
+        model: Option<String>,
         ring_buffer_max: usize,
     ) -> Self {
         Self {
@@ -194,6 +204,9 @@ impl TerminalSlot {
             cwd,
             env: Mutex::new(env),
             backend,
+            agent,
+            provider_id,
+            model,
             status: Mutex::new(SlotStatus::Running),
             exit_code: Mutex::new(None),
             pid: Mutex::new(None),

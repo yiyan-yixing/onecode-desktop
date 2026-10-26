@@ -29,6 +29,8 @@ import { SettingsController } from './settings.js';
 import { ModelSwitchController } from './provider-switch.js';
 import * as ipc from './ipc-bridge.js';
 import { MonacoPreviewController } from './editor/monaco-preview.js';
+import { WorkPanelController } from './work-panel.js';
+import { sendTaskToSlot } from './agent-dispatch.js';
 const tabManager = new TabManager();
 const orbital = new OrbitalController();
 const palette = new PaletteController();
@@ -40,19 +42,43 @@ const modelSwitch = new ModelSwitchController();
 const themeManager = new ThemeManager();
 const ambientController = new AmbientController();
 let ccView = null;
-let monacoPreview = null; // M3: Monaco 编辑器原型
+let monacoPreview = null;
+let workPanel = null;
 
 // ── Right panel Tab state ──────────────────────────────────────────
 let _activeRightTab;
 try { _activeRightTab = localStorage.getItem('fe-active-tab') || 'file'; } catch { _activeRightTab = 'file'; }
 
+/**
+ * 切换右面板 tab。
+ *
+ * 早先这里把 `_activeRightTab` 硬编码成 'file'（当时只有一页，是退化的）。
+ * 加了「工作」页之后要真的切：按钮态、内容显隐、以及各控制器只在可见时才工作
+ * （文件树在后台跑没意义，还会白读盘）。
+ */
 function switchRightTab(tabId) {
-  _activeRightTab = 'file'; // P1-6: right panel only has file tab
+  const next = tabId === 'work' ? 'work' : 'file';
+  _activeRightTab = next;
 
-  // Update fileExplorer visibility based on panel open state
   const panel = document.getElementById('filePanel');
   const panelOpen = panel && !panel.classList.contains('collapsed');
-  fileExplorer.setVisible(panelOpen);
+
+  panel?.querySelectorAll('.fe-tab').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.tab === next);
+  });
+  document.getElementById('feTabFile')?.classList.toggle('active', next === 'file');
+  document.getElementById('feTabWork')?.classList.toggle('active', next === 'work');
+
+  fileExplorer.setVisible(panelOpen && next === 'file');
+  if (next === 'work' && panelOpen) workPanel?.refresh();
+
+  // 记住选的是哪一页。原先只读不写（tab 写死成 file，读取是死代码）；
+  // 现在切换是真的了，顺手让它闭环。
+  try {
+    localStorage.setItem('fe-active-tab', next);
+  } catch {
+    /* localStorage 不可用就算了，不值得为它报错 */
+  }
 }
 
 // ── P1-13: Backend disconnected banner ──────────────────────────────
@@ -110,6 +136,11 @@ async function init() {
   monacoPreview = new MonacoPreviewController();
   monacoPreview.init();
   palette.setOpenEditor(() => { palette.close(); monacoPreview && monacoPreview.open(); });
+  palette.setOpenWork(() => {
+    palette.close();
+    toggleRightPanel(true); // 没开就先展开，否则点了像没反应
+    switchRightTab('work');
+  });
   ripple.init();
 
   // 监听配置文件外部变更（agent 直接修改后热刷新）
@@ -232,6 +263,15 @@ async function init() {
   const filePanel = document.getElementById('filePanel');
   const feTabFile = document.getElementById('feTabFile');
 
+  // 工作台（产出 + 任务）：面板只排版，判断全在 Rust；派活复用唯一写入实现
+  workPanel = new WorkPanelController({
+    ipc,
+    tabManager,
+    sendTaskToSlot,
+    onNotice: (m) => console.warn('[work]', m),
+  });
+  workPanel.init(document.getElementById('feTabWork'));
+
   // FileExplorerController renders into the file tab content container
   fileExplorer.init(feTabFile, tabManager);
 
@@ -292,6 +332,26 @@ async function init() {
   ipc.onTrayNewTerminal(() => tabManager.createTab());
   ipc.onAppBeforeQuit(() => tabManager.closeAllTabs());
   ipc.onHealthReport((reports) => showHealthWarning(reports));
+  // 启动期降级：取一次并显示（此前它们只进日志）
+  ipc.startupIssues().then(showStartupIssues).catch((e) => console.warn('[startup] 读取失败', e));
+
+  // 自检（ONECODE_SELFCHECK=1）：在真实 WebView 里对真实命令逐条校验形状。
+  // 关掉时连动态 import 都不做 —— 开关由后端唯一决定，前端不猜。
+  ipc.selfcheckFlags().then((flags) => {
+    if (!flags || !flags.enabled) return;
+    import('./selfcheck.js')
+      // 自检会在 cwd 下写结构化槽位记录 → 必须用临时目录，不能污染真实项目
+      .then((m) => {
+        const cwd = tabManager.getActiveCwd() || '';
+        return m.runSelfCheck(ipc, {
+          cwd,
+          hasProject: !!cwd,
+          // 花钱的探测必须显式打开（ONECODE_SELFCHECK_NETWORK=1）
+          network: !!flags.network,
+        });
+      })
+      .catch((e) => console.warn('[selfcheck] 失败', e));
+  }).catch(() => {});
 }
 
 function updateStatusbar(tm) {
@@ -427,18 +487,50 @@ const ICONS = {
   agents: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" style="width:10px;height:10px"><circle cx="8" cy="5" r="2.6"/><path d="M3 14c0-2.8 2.2-4.5 5-4.5s5 1.7 5 4.5"/></svg>',
 };
 
-function showHealthWarning(reports) {
+// 告警槽有两个来源：**启动期降级**（静态、一次）与**进程健康**（后台每 5s）。
+// 合并渲染，避免后者把前者冲掉 —— 启动期降级恰恰是最需要一直看得见的那种。
+let _healthReports = [];
+let _startupIssues = [];
+
+const WARN_ICON =
+  '<svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" style="width:12px;height:12px;vertical-align:-2px;margin-right:3px"><circle cx="7" cy="7" r="6"/><line x1="7" y1="4" x2="7" y2="7"/><line x1="7" y1="9" x2="7.01" y2="9"/></svg>';
+
+function renderRibbonWarn() {
   const el = document.getElementById('healthWarn');
   if (!el) return;
-  const warn = reports.find(r => r.action === 'warn' || r.action === 'stale' || r.action === 'kill');
-  if (!warn) { el.classList.remove('on'); el.textContent = ''; return; }
+  // 启动期降级优先：它影响的是"功能有没有"，进程 RSS 只是"跑得好不好"
+  if (_startupIssues.length) {
+    const first = _startupIssues[0];
+    const more = _startupIssues.length > 1 ? `（另有 ${_startupIssues.length - 1} 项）` : '';
+    el.innerHTML = WARN_ICON + esc(first.impact) + more;
+    el.title = _startupIssues.map((i) => `${i.kind}: ${i.message}\n影响：${i.impact}`).join('\n\n');
+    el.classList.add('on');
+    return;
+  }
+  const warn = _healthReports.find(r => r.action === 'warn' || r.action === 'stale' || r.action === 'kill');
+  if (!warn) { el.classList.remove('on'); el.textContent = ''; el.title = ''; return; }
   const tip = warn.action === 'warn'
     ? `#${warn.pid || '?'} RSS 偏高`
     : warn.action === 'kill'
       ? `#${warn.pid || '?'} 进程僵尸`
       : `#${warn.pid || '?'} 进程异常`;
-  el.innerHTML = '<svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" style="width:12px;height:12px;vertical-align:-2px;margin-right:3px"><circle cx="7" cy="7" r="6"/><line x1="7" y1="4" x2="7" y2="7"/><line x1="7" y1="9" x2="7.01" y2="9"/></svg>' + tip;
+  el.innerHTML = WARN_ICON + tip;
+  el.title = '';
   el.classList.add('on');
+}
+
+function showHealthWarning(reports) {
+  _healthReports = Array.isArray(reports) ? reports : [];
+  renderRibbonWarn();
+}
+
+/** 启动期降级：**必须显示**，否则用户只会看到"功能莫名其妙少了"。 */
+function showStartupIssues(issues) {
+  _startupIssues = Array.isArray(issues) ? issues : [];
+  renderRibbonWarn();
+  for (const i of _startupIssues) {
+    console.warn('[startup]', i.kind, i.message, '影响：', i.impact);
+  }
 }
 
 function initKeybindings(tm) {
@@ -620,3 +712,14 @@ if (document.readyState === 'loading') {
 } else {
   init();
 }
+
+// 调试/e2e 句柄：把主要控制器挂出来，便于在开发者工具或自动化脚本里驱动真实流程。
+// 这不是给业务用的 API —— 它只是让"前端跑起来之后到底发生了什么"可以被观察与断言
+// （见 scripts/app-boot-check.sh：它用这个句柄走一遍派发 → 诚实提示 → 工作台 → 派活）。
+window.__onecode = {
+  get tabManager() { return tabManager; },
+  get palette() { return palette; },
+  get workPanel() { return workPanel; },
+  get fileExplorer() { return fileExplorer; },
+  ipc,
+};

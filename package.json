@@ -10,7 +10,9 @@
     "dev": "tauri dev",
     "build": "tauri build",
     "test": "node --test \"tests/*.test.mjs\"",
-    "test:verbose": "node --test --test-reporter=spec \"tests/*.test.mjs\""
+    "test:verbose": "node --test --test-reporter=spec \"tests/*.test.mjs\"",
+    "test:render": "bash scripts/render-check.sh",
+    "test:boot": "bash scripts/app-boot-check.sh"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.1.0",

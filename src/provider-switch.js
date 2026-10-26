@@ -12,6 +12,7 @@
 //   → emit provider-switched → 本模块收到事件 → refreshChip() + restartSessions()
 
 import * as ipc from './ipc-bridge.js';
+import { switchToast } from './switch-toast.js';
 
 const ICON_CHIP = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" style="width:11px;height:11px"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.6 3.6l1.4 1.4M11 11l1.4 1.4M3.6 12.4L5 11M11 5l1.4-1.4"/></svg>';
 const ICON_PLUS = '<svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" style="width:11px;height:11px"><line x1="7" y1="2" x2="7" y2="12"/><line x1="2" y1="7" x2="12" y2="7"/></svg>';
@@ -122,8 +123,8 @@ export class ModelSwitchController {
         try {
           await this.refresh();
           if (payload && payload.to) {
-            const name = this._providerName(payload.to) || payload.to;
-            toast(`已切换到 ${name}`, 'ok');
+            const t = switchToast(payload, (id) => this._providerName(id));
+            toast(t.text, t.kind);
           }
           await this.restartSessions();
         } catch (e) {
@@ -563,7 +564,10 @@ export class ModelSwitchController {
           api_key: keyEl.value.trim(),
           model: modelEl.value.trim(),
         };
-        if (!payload.base_url || !payload.api_key) { toast('请先填 Base URL 和 API Key', 'err'); return; }
+        // 只强制 Base URL：**本地模型档**（Ollama / LM Studio / vLLM）本来就没有 API Key，
+        // 强制要 key 等于让人编一个假 key。云端缺凭据由后端算好并显示
+        // （`ProviderCatalogView.usable` / `unusable_reason`），前端不重抄这个判断。
+        if (!payload.base_url) { toast('请先填 Base URL', 'err'); return; }
         // 借用 test_connection：临时构造一个 provider 对象走后端 providers_test 不便，
         // 这里直接用已保存逻辑——若当前编辑的是已有供应商则测它，否则提示先保存。
         if (isEdit && editing) {

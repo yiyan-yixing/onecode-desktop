@@ -3,8 +3,13 @@
 // 数据源复用 CcStatusView 的 agents 列表（通过 onAgents 回调注入）。
 // 渲染：icon + name + @id + description + scope 标签。
 //
-// F2: 点击 agent 项 → 向活跃终端插入 `@agent-id `（复用 MentionController 的
-// sendInput 路径，即 ipc.ptyWrite）。无活跃终端时显示提示。
+// ★ 点击语义（@name 真派发）：
+//   - **点击** = 派发：新开一个以该 agent 为身份的 Slot（自己的 system prompt、
+//     自己的 transcript、自己的权限姿态），而不是往当前终端打 `@name` 文本。
+//   - **⌥/Ctrl/Cmd + 点击** = 在与活跃终端同一会话里临时点名（插入 `@id `）。
+//   两种语义必须可区分 —— 否则"管理员工"会退化成"打字"。
+
+import { dispatchAgent, insertAgentMention, isMentionModifier } from './agent-dispatch.js';
 
 const SCOPE_COLORS = {
   project: { bg: 'rgba(5,150,105,.08)', color: 'var(--em)', border: 'rgba(5,150,105,.15)' },
@@ -173,9 +178,14 @@ export class AgentsListController {
         `</div>` +
         `<span class="al-scope" style="background:${scopeStyle.bg};color:${scopeStyle.color};border:1px solid ${scopeStyle.border}">${esc(agent.scope)}</span>`;
 
-      // F2: 点击 → @mention 插入到活跃终端
-      item.addEventListener('click', () => this._onAgentClick(agent.id, item));
-      // P2-4: 键盘支持 — Enter/Space 也可触发 @mention 插入
+      // 说明点击语义（否则用户不知道点一下会发生什么）
+      item.title = `点击 = 以 @${agent.id} 的身份新开一个终端\n⌥/Ctrl/Cmd + 点击 = 在当前终端插入 @${agent.id}`;
+
+      // ★ 点击 = 派发新员工 Slot；⌥/Ctrl/Cmd + 点击 = 临时点名（保留旧行为）
+      item.addEventListener('click', (e) => this._onAgentClick(agent.id, item, {
+        insertMention: isMentionModifier(e),
+      }));
+      // P2-4: 键盘支持 — Enter/Space 走派发
       item.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
@@ -188,56 +198,53 @@ export class AgentsListController {
   }
 
   /**
-   * F2: 点击 agent 项 → 向活跃终端插入 `@agent-id `。
-   * 复用 MentionController 的 sendInput 路径（ipc.ptyWrite 封装）。
-   * 防抖：300ms 内重复点击忽略，防止快速连点产生重复插入。
+   * 点击 agent 项。
+   * - 默认：**派发** —— 新开一个以该 agent 为身份的 Slot（返回 Promise，便于等待）。
+   * - `insertMention`：把 `@id ` 写进当前终端（同会话临时点名）。
+   * 防抖：300ms 内重复点击忽略。
    */
-  _onAgentClick(agentId, itemEl) {
+  _onAgentClick(agentId, itemEl, opts = {}) {
     const now = Date.now();
-    if (now - this._lastClickTime < CLICK_DEBOUNCE_MS) return;
+    if (now - this._lastClickTime < CLICK_DEBOUNCE_MS) return Promise.resolve();
     this._lastClickTime = now;
 
-    // 无 TabManager 或无活跃终端 → 显示提示
-    if (!this._tabManager || !this._tabManager.activeId) {
-      this._showNoTerminalToast();
-      return;
+    if (opts.insertMention) {
+      this._insertMention(agentId, itemEl);
+      return Promise.resolve();
     }
+    return this._dispatchAgent(agentId, itemEl);
+  }
 
-    const activeId = this._tabManager.activeId;
-    const st = this._tabManager.tabs.get(activeId);
-    if (!st || st.isError) {
-      this._showNoTerminalToast();
-      return;
-    }
+  /**
+   * 派发：以该 agent 为身份**新开一个 Slot**。
+   * 实现见 `agent-dispatch.js` —— 三处可点 agent 的界面共用同一份，
+   * 避免"改一处漏三处"。
+   */
+  async _dispatchAgent(agentId, itemEl) {
+    itemEl.classList.add('al-mention-flash');
+    setTimeout(() => itemEl.classList.remove('al-mention-flash'), 400);
+    await dispatchAgent({
+      tabManager: this._tabManager,
+      agentId,
+      agents: typeof this._provider === 'function' ? this._provider() : this._agents,
+      onNotice: (m) => this._showToast(m),
+    });
+  }
 
-    // 向活跃 PTY 写入 `@agent-id `
-    // 路径 1（首选）：复用 MentionController.sendInput — 即 ipc.ptyWrite(id, s) 的封装，
-    //   与手动输入 @ 触发 mention 选中后走完全相同的写入路径。
-    // 路径 2（兜底）：若 mention controller 不可用，通过注入的 _ptyWrite 回调写入。
-    //   _ptyWrite 返回 Promise（ipc.ptyWrite 封装），.catch 记录错误避免未处理 rejection。
-    let written = false;
-    if (st.mention && typeof st.mention.sendInput === 'function') {
-      // 若 mention 弹窗正在显示（用户此前输入了 @prefix），先关闭弹窗。
-      // 与 MentionController._select 行为一致：先 hide() 清理状态，再 sendInput。
-      if (st.mention.active) st.mention.hide();
-      try {
-        st.mention.sendInput(`@${agentId} `);
-        written = true;
-      } catch (e) {
-        // mention.sendInput 抛同步异常时回退到 _ptyWrite
-        console.warn('[agents-list] mention.sendInput failed, falling back to ptyWrite:', e);
-      }
-    }
-    if (!written && this._ptyWrite) {
-      this._ptyWrite(activeId, `@${agentId} `).catch((e) => {
-        console.warn('[agents-list] ptyWrite failed:', e);
-      });
-      written = true;
-    }
-
-    // 仅在成功写入后给视觉反馈（避免无写入时闪烁误导用户）
-    if (written) {
-      this._flashAndFocus(itemEl, st);
+  /**
+   * 临时点名：向活跃终端插入 `@agent-id `。
+   * 实现见 `agent-dispatch.js`。
+   */
+  _insertMention(agentId, itemEl) {
+    const ok = insertAgentMention({
+      tabManager: this._tabManager,
+      agentId,
+      ptyWrite: this._ptyWrite,
+      onNotice: (m) => this._showToast(m),
+    });
+    if (ok) {
+      const st = this._tabManager.tabs.get(this._tabManager.activeId);
+      if (st) this._flashAndFocus(itemEl, st);
     }
   }
 
@@ -249,19 +256,20 @@ export class AgentsListController {
     try { st.term.focus(); } catch (e) { console.warn('[agents-list] focus failed:', e); }
   }
 
-  /** 无活跃终端时的提示 toast */
-  _showNoTerminalToast() {
+  /** 底部提示 toast（派发缺上下文、派发失败、无终端等都用它） */
+  _showToast(msg) {
     let toast = this._container.querySelector('.al-toast');
     if (!toast) {
       toast = document.createElement('div');
       toast.className = 'al-toast';
-      toast.innerHTML = '<span class="al-toast-msg">请先创建一个终端</span>';
+      toast.innerHTML = '<span class="al-toast-msg"></span>';
       this._container.appendChild(toast);
     }
+    toast.querySelector('.al-toast-msg').textContent = msg;
     toast.classList.add('on');
     if (this._toastTimer) clearTimeout(this._toastTimer);
     this._toastTimer = setTimeout(() => {
       toast.classList.remove('on');
-    }, 2000);
+    }, 2400);
   }
 }
